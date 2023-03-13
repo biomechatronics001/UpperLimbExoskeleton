@@ -1,0 +1,1734 @@
+//for right knee exo, positive current assist extension, and torque sensor measures positive torque
+#include "Insole_mod.h"
+#include "Motor_Control_Pediatric_V2.h"
+#include <SPI.h>
+#include <FlexCAN.h>
+#include "ads1292r.h"
+#include "Torque_Control.h"
+#include "WL_IMU.h"
+#include "WL_Encoder.h"
+#include "CIC.h"
+#include <Arduino.h>
+#include <stdio.h>
+//#include <SD.h>
+
+// *** for RingBuf *** //
+#include "SdFat.h"
+#include "RingBuf.h"
+
+// Use Teensy SDIO
+#define SD_CONFIG SdioConfig(FIFO_SDIO)
+
+// Interval between points for 25 ksps.
+#define LOG_INTERVAL_USEC 2000 // 500 Hz
+
+// Size to log 10 byte lines at 25 kHz for more than ten minutes.
+// #define LOG_FILE_SIZE 10*25000*600  // Size to log 10 byte lines at 25 kHz for more than ten minutes = 150,000,000 bytes.
+// #define LOG_FILE_SIZE 100 * 500 * 80 // Size to log 10 byte lines at 500 Hz for more than 80 seconds =  bytes.
+#define LOG_FILE_SIZE 280 * 500 * 600 // Size to log 10 byte lines at 500 Hz for more than 80 seconds = 84,000,000 bytes.
+
+// Space to hold more than 800 ms of data for 10 byte lines at 25 ksps.
+// #define RING_BUF_CAPACITY 400*512 // Space to hold more than 800 ms of data for 10 byte lines at 25 ksps.
+// #define RING_BUF_CAPACITY 400 * 512 * 10 / 50 // Space to hold more than 800 ms of data for 10 byte lines at 25 ksps.
+#define RING_BUF_CAPACITY 280 * 500 * 1 // Space to hold more than 800 ms of data for 10 byte lines at 25 ksps.
+
+// #define LOG_FILENAME "Walking.csv"
+#define LOG_FILENAME "0407_Powered_Sainan_Walking_bd0.04_0.00_kd_1_0.6_0_8_0_0.07_newtau.csv"
+//#define LOG_FILENAME "0407_Powered_Stanley_STS.csv"
+
+SdFs sd;
+FsFile file;
+
+// RingBuf for File type FsFile.
+RingBuf<FsFile, RING_BUF_CAPACITY> rb;
+
+int stopFlag = 0;
+// *** End for RingBuf *** //
+
+CAN_message_t msgR;
+struct CAN_filter_t defaultMask;
+
+int assist_mode = 10;
+int saveDataFlag = 0;
+
+double weight = 52; // [kg] weight of the subject
+uint32_t ID_offset = 0x140;
+uint32_t Motor_ID1 = 2; // Motor Can Bus ID, left leg, loadcell: port 1, positive current = extension // updated on 2022-04-01
+uint32_t Motor_ID2 = 3; // Motor Can Bus ID, right leg, loadcell: port 2, positive current = flexion // updated on 2022-04-01
+int CAN_ID = 0;         // CAN port from Teensy
+double Gear_ratio = 9;  //The actuator gear ratio, will enfluence actuator angle and angular velocity
+int Stop_button = 0;    // Stop function
+String mode = "start";
+double milli_time_current_double = 0;
+Motor_Control_Pediatric_V2 m1(Motor_ID1, CAN_ID, Gear_ratio); //Create motor object see Motor_Control_Pediatric_V2.h
+Motor_Control_Pediatric_V2 m2(Motor_ID2, CAN_ID, Gear_ratio); //Create motor object see Motor_Control_Pediatric_V2.h
+ads1292r torque_sensor1;                                      //Create torque sensor object see ads1292r.h
+Torque_Control Tor_control;                                   //Creare torque control object see Torque_control.h
+IMU imu;                                                      //Create IMU object see WL_IMU.h
+Insole insole;                                                // Create insole object
+EncoderCl encoder;
+CIC cic;
+double Pgain = 7.5;    //P gain of torque control
+double Igain = 0.7;    //I gain of torque control
+double Dgain = 0;      //D gain of torque control
+double MaxPIDout = 10; //Max torque control PID output (Unit Current A, inner loop is current controller)
+
+double Fsample = 500;        // [Hz] teensy controller sample rate (Maximum frequency: 1000 Hz due to Can Bus)
+double Fsample_ble = 100;    // [Hz] Bluetooth sending data frequency
+double Fsample_insole = 200; // [Hz] insole reading data frequency
+unsigned long current_time = 0;
+unsigned long previous_time = 0;                                                        // used to control the controller sample rate.
+unsigned long previous_time_ble = 0;                                                    // used to control the Bluetooth communication frequency
+unsigned long previous_time_insole = 0;                                                 // used to control the insole reading data frequency
+unsigned long Tinterval_microsecond = (unsigned long)(1000000 / Fsample);               // used to control the teensy controller frequency
+unsigned long Tinterval_ble_microsecond = (unsigned long)(1000000 / Fsample_ble);       // used to control the Bluetooth communication frequency
+unsigned long Tinterval_insole_microsecond = (unsigned long)(1000000 / Fsample_insole); // used to control the insole reading data frequency
+//double Tsample = 1 / Fsample;           // sample period (second)
+
+double Cur_command_L = 0;
+double Cur_command_R = 0;
+int current_limitation = 10; //(unit Amp)//double Tor_command_L = 0;
+// Trigger
+int triggerOn = 0;
+int triggerPin = A9; //reading pin
+int triggerVal = 0;  // analog trigger pin value
+//
+//double Tor_command_R = 0;
+//double Pos_command_L = 0;
+//double Pos_command_R = 0;
+//double milli_time_current_double = 0;
+
+//***Data sent via bluetooth
+char datalength_ble = 32;      // Bluetooth Data Length (32)
+char data_ble[60] = {0};       // Data array for bluetooth data sending:  Teensy->RS232->Adafruit Feather nRF52840 Express(peripheral)->bluetooth->Adafruit Feather nRF52840 Express(central)->usb->computer
+char data_rs232_rx[60] = {0};  // Data array for bluetooth data receive:  computer->USB->Adafruit Feather nRF52840 Express(central)->bluetooth->Adafruit Feather nRF52840 Express(peripheral)->RS232->Teensy
+int LK_ble = 0;                //left knee angle
+int RK_ble = 0;                //right knee angle
+int current_command_L_ble = 0; //current reference(A) for inner loop current control
+int current_command_R_ble = 0;
+int current_actual_L_ble = 0;
+int current_actual_R_ble = 0;
+int torque_command_L_ble = 0; //total torque reference(N-m)
+int torque_command_R_ble = 0;
+int torque_command_imp_L_ble = 0; // impedance torque
+int torque_command_imp_R_ble = 0; // impedance torque
+int torque_command_ff_L_ble = 0;  // feedforward torque
+int torque_command_ff_R_ble = 0;  // feedforward torque
+int torque_L_ble = 0;             //actual torque(N-m)(measured by torque sensor)
+int torque_R_ble = 0;
+double torque_command_L = 0;
+double torque_command_R = 0;
+
+int gait_percentage_L_ble = 0;
+int insole_torque_command_L_ble = 0;
+int insole_torque_command_R_ble = 0;
+int insole_gait_percent_L_ble = 0;
+int insole_gait_percent_R_ble = 0;
+int imu_gait_percent_L_ble = 0;
+int imu_gait_percent_R_ble = 0;
+int imu_gait_percent_imp_L_ble = 0; // impedance torque
+int imu_gait_percent_imp_R_ble = 0; // mpedance torque
+int imu_gait_percent_ff_L_ble = 0;  // eedforward biological torque
+int imu_gait_percent_ff_R_ble = 0;  // feedforward biological torque
+double Insole_gain = 5;
+
+//int percentage_ble = 0;  //gait percentage(%)
+//int torque_commandGP_ble = 0;     //torque reference(N-m) generated by gait percentage VS torque reference table
+//int current_ble = 0;              //actual current (A)
+
+//***********High Level Communication*********//
+int LK_highlevel = 0;
+int RK_highlevel = 0;
+
+int TK_highlevel = 0;
+int LT_highlevel = 0;
+int RT_highlevel = 0;
+int LS_highlevel = 0;
+int RS_highlevel = 0;
+
+int Left_Knee_Torque = 0;
+int Right_Knee_Torque = 0;
+char data_serial_highlevel[101] = {0};
+char data_highlevel_rx[7] = {0}; //data high level communication
+char Highlevel_Data_Length_Send = 101;
+double Left_Knee_Torque_Command;
+double Right_Knee_Torque_Command;
+double relTime = 0.0;
+int SDcounter = 0;
+int SDtotalCounter = 0;
+String dataBuffer = "";
+#define charBufferSize 100
+char charBuffer[charBufferSize];
+long charBufferPosition = 0;
+//File dataFile;
+
+//File dataFile = SD.open("walking.txt", FILE_WRITE);
+
+void setup()
+{
+  // put your setup code here, to run once:
+  delay(3000);
+  Serial.begin(115200);  //used for communication with computer.
+  Serial4.begin(115200); //used to communication with bluetooth peripheral. Teensy->RS232->Adafruit Feather nRF52840 Express(peripheral)
+  initial_CAN();
+  torque_sensor1.Torque_sensor_initial();                                           //initial the torque sensor see ads1292r.cpp.
+  torque_sensor1.Torque_sensor_gain(0.0003446 * (-1) * 2, 0.0003446 * (-1) * 2.35); //set the calibration gain for torque sensor. Torque= gain* ADCvalue+offset.see ads1292r.cpp.
+  torque_sensor1.Torque_sensor_offset_calibration();                                //Auto offset the torque sensor to zero. see ads1292r.cpp.
+  delay(500);
+  imu.Gain_E = 1;         //Extension gain for delay output feedback control
+  imu.Gain_F = 1;         //Flexion gain for delay output feedback control  DOFC.Gain_E = 10;            //Extension gain for delay output feedback control
+  imu.STS_Gain = 1.7;
+  imu.delaypoint = 0;     //realative to delay time (delaypoint*sampletime=delaytime) for delay output feedback control
+  encoder.Gain_E = 1;     //Extension gain for delay output feedback control
+  encoder.Gain_F = 1;     //Flexion gain for delay output feedback control
+  encoder.delaypoint = 0; //realative to delay time (delaypoint*sampletime=delaytime) for delay output feedback control
+  imu.alpha = 5;
+  imu.beta = 2;
+  imu.angleRelativeThreshold = 20;
+  m1.init_motor(); // Strat the CAN bus communication & Motor Control
+  delay(100);
+  m2.init_motor(); // Strat the CAN bus communication & Motor Control
+  delay(100);
+  reset_motor_angle();
+  CurrentControlSetup();
+  // initialize sd card
+  // Serial.print("Initializing SD card...");
+  //   see if the card is present and can be initialized:
+  // if (!SD.begin(chipSelect)) {
+  //   Serial.println("Card failed, or not present");
+  //   // don’t do anything more:
+  //   return; 
+  // }
+  // SD.remove("walking.txt");
+  // Serial.println("card initialized.");
+
+  //TorqueControlSetup();    //initialize torque control (if you want to use torque sensor as a feedback you also need to use this function)
+  //CurrentControlSetup();
+  //PositionControlSetup();
+  insole.INIT();
+  // init trigger
+  pinMode(triggerPin, INPUT);
+  pinMode(A8, OUTPUT);
+  
+  // cic.calculateSigmoid();
+  cic.calculateSigmoid(cic.kdMax, cic.kdMin, cic.kd_arr_Junxi);
+  cic.calculateSigmoid(cic.bdMax, cic.bdMin, cic.bd_arr_Junxi);
+  cic.calculateSigmoid(1, 0, cic.sigmoid);
+  //  dataFile = SD.open("walking.txt", O_WRITE|O_CREAT);
+  if (saveDataFlag)
+  {
+    SDCardSetup();
+  }
+  
+}
+
+void loop()
+{
+
+  // digitalWrite(A8, LOW); //pin converted into GND
+  //  File dataFile = SD.open("walking.txt", FILE_WRITE);
+  // clearSerialInput();
+  while (stopFlag)
+  {
+  };
+  // logData();
+  // clearSerialInput();
+  CurrentControl();
+  //  dataFile.close();
+  //TorqueControlExample();    //if you want to try torque control, please uncommment TorqueControlExample(); and use this function.
+  //CurrentControlExample();   //if you want to try current control, please uncommment CurrentControlExample(); and use this function.
+  //PositionControlExample();  //if you want to try position control, please uncommment PositionControlExample(); and use this function.
+}
+
+void SDCardSetup()
+{
+  sd.remove(LOG_FILENAME);
+
+  // Initialize the SD.
+  if (!sd.begin(SD_CONFIG))
+  {
+    sd.initErrorHalt(&Serial);
+  }
+  // Open or create file - truncate existing file.
+  if (!file.open(LOG_FILENAME, O_RDWR | O_CREAT | O_TRUNC))
+  {
+    Serial.println("open failed\n");
+    return;
+  }
+  // File must be pre-allocated to avoid huge
+  // delays searching for free clusters.
+  if (!file.preAllocate(LOG_FILE_SIZE))
+  {
+    Serial.println("preAllocate failed\n");
+    file.close();
+    return;
+  }
+  // initialize the RingBuf.
+  rb.begin(&file);
+  //  Serial.println("Type any character to stop");
+}
+
+void CurrentControlSetup()
+{
+  imu.INIT(); //Initialize IMU;
+  delay(500);
+  imu.INIT_MEAN();
+  current_time = micros();
+  previous_time = current_time;
+  previous_time_ble = current_time;
+  previous_time_insole = current_time;
+}
+
+void CurrentControl()
+{
+  ////******IMU+Current Control Example Torque Constant 0.6 Nm/A**********////////
+  imu.READ();                          //Check if IMU data available and read it. the sample rate is 100 hz
+  torque_sensor1.Torque_sensor_read(); //Check if torque sensor1 is available // Vahid
+  current_time = micros();             //query current time (microsencond)
+
+  //********* use to control the insole reading data frequency **********//
+  if (current_time - previous_time_insole > Tinterval_insole_microsecond)
+  {
+    insole.READ();
+    previous_time_insole = current_time;
+    // plot_cic_IMU_data();
+  }
+
+  //********* use to control the teensy controller frequency **********//
+  if (current_time - previous_time > Tinterval_microsecond) // check if the time period of control loop is already larger than Sample period of control loop (Tinterval_microsecond)
+  {
+    if (Stop_button) //stop
+    {
+      Cur_command_L = 0;
+      Cur_command_R = 0;
+    }
+    else
+    {
+      Compute_Cur_Commands(); // Vahid
+    }
+    Cur_limitation();
+
+    //Cur_command_L = 2;//positive=flex
+    //Cur_command_R = -2;//positive=exten
+    m1.send_current_command(Cur_command_L);
+    receive_CAN_data();
+    m2.send_current_command(Cur_command_R);
+    receive_CAN_data();
+    /////*********Print motor Position - Use below code to read Position 2021-08-17 by Howard*********/////
+    m1.read_multi_turns_angle(); //read angle and angle velocity
+    receive_CAN_data();
+    m2.read_multi_turns_angle(); //read angle and angle velocity
+    receive_CAN_data();
+    encoder.UpdateData(m1.motorAngle, m2.motorAngle);
+    encoder.DelayedOutputTorqueControl(); // calculate the encoder-based torque using Samsung algorithm
+    // Read trigger signal
+    triggerVal = analogRead(triggerPin);
+    digitalWrite(A8, LOW); //pin converted into GND
+    if (triggerVal < 150)
+    {
+      triggerOn = 0;
+    }
+    else
+    {
+      triggerOn = 1;
+    }
+    //Serial.println(triggerVal);
+    // Serial.print(" ");
+    // Serial.println(triggerOn);
+
+    //    save_debug_data_SDCard();
+    if (saveDataFlag){
+      logData3();
+    }
+
+    previous_time = current_time; //reset previous control loop time
+    relTime += Tinterval_microsecond / 1000;
+  }
+
+  //********* use to control the Bluetooth communication frequency **********//
+  if (current_time - previous_time_ble > Tinterval_ble_microsecond)
+  {
+    receive_ble_Data();
+    send_ble_Data(); // send the BLE data
+    previous_time_ble = current_time;
+    //     plot_cic_IMU_data();
+    //plot_cic_std();
+    // logData2();
+    plot_cic_data();
+    // plot_STS_data();
+    // logData2();
+    // Serial.println(stopFlag);
+    // plot_debug_data();
+    // plot_cic_torque_current_data();
+    //    plot_cic_gait_phase_data();
+    // plot_cic_torque_data();
+    // plot_trigger_data();
+    // plot_motor_data();
+    // plot_imu_data();
+    //plot_torque_sensor_data();
+    //plot_insole_data();
+    //plot_controler_data()
+    //    plot_squat_data();
+  }
+  if (Serial.available())
+  {
+    char cmd = (char)Serial.read();
+    if (cmd == 's')
+    {
+      stopFlag = 1;
+      Serial.println("Stopped");
+      if (saveDataFlag)
+      {
+        SDCardSaveToFile();
+      }
+    }
+  }
+}
+
+void SDCardSaveToFile()
+{
+  rb.sync();
+  file.truncate();
+  file.rewind();
+  file.close();
+}
+
+void Compute_Cur_Commands()
+{
+  if (assist_mode == 1) //IMU walking
+  {
+    mode = "Walking (IMU)";
+    Cur_command_L = -imu.DOTC[0] / 2.2; //this is for bilateral walking assistance_left leg
+    Cur_command_R = +imu.DOTC[1] / 2.2; //this is for bilateral walking assistance_right leg
+    // Serial.print(Cur_command_L);
+    // Serial.print(" ");
+    // Serial.println(Cur_command_R);
+    // Serial.print("imu.gainE=");
+    // Serial.println(imu.Gain_E);
+  }
+  else if (assist_mode == 2)
+  {
+    mode = "Walking (Insoles)";
+    Cur_command_L = Insole_gain * insole.normalized_torque_command_L;
+    Cur_command_R = Insole_gain * insole.normalized_torque_command_R;
+  }
+  else if (assist_mode == 3) //Encode Walking
+  {
+    mode = "Walking (Encoder)";
+    Cur_command_L = encoder.DOFC[0] / 2.2;
+    Cur_command_R = -encoder.DOFC[1] / 2.2;
+
+    //    Serial.print("left encoder torque: ");
+    //    Serial.println(encoder.DOFC[0]);
+    //    Serial.print("right encoder torque: ");
+    //    Serial.println(encoder.DOFC[1]);
+  }
+  else if (assist_mode == 4) //sine wave
+  {
+    mode = "Sine Wave";
+    //      Cur_command_L =  imu.Gain_E * sin(2 * PI * current_time / 1000000)/2.2;    //(unit Amp);
+    //      Cur_command_R = -imu.Gain_F * sin(2 * PI * current_time / 1000000)/2.2;    //(unit Amp);
+    Cur_command_L = 1 * sin(2 * PI * current_time / 1000000) / 2.2; //(unit Amp);
+    Cur_command_R = 1 * sin(2 * PI * current_time / 1000000) / 2.2; //(unit Amp);
+    milli_time_current_double = millis();
+    milli_time_current_double = milli_time_current_double / 1000.0;
+  }
+  else if (assist_mode == 5)
+  {
+
+    mode = "High Level Control";
+
+    send_serial_Data_Highlevel(); //Serial communication with High level system
+    receive_serial_Data_Highlevel();
+    Cur_command_L = Left_Knee_Torque_Command / 2.2;
+    Cur_command_R = Right_Knee_Torque_Command / 2.2;
+  }
+  else if (assist_mode == 6)
+  {
+    mode = "Constant Signal";
+    Cur_command_L = 0.5; //* imu.Gain_E;
+    Cur_command_R = -0.5; //* imu.Gain_F;
+  }
+  else if (assist_mode == 7)
+  {
+    mode = "Squatting (IMU)";
+
+    Cur_command_L = 10 * 0.02 * imu.Gain_E * imu.SquatTorque / 2.2;
+    // Serial.print(imu.Gain_E);
+    // Serial.print(" ");
+    // Serial.println(imu.Gain_F);
+    Cur_command_R = -10 * 0.02 * imu.Gain_E * imu.SquatTorque / 2.2;
+  }
+  else if (assist_mode == 8)
+  {
+    mode = "Sit-to-Stand (IMU)";
+    Cur_command_L = +imu.STSTorque / 2.2;
+    Cur_command_R = -imu.STSTorque / 2.2;
+  }
+  else if (assist_mode == 9)
+  {
+    mode = "Stair Ascending (IMU)";
+    Cur_command_L = +imu.DOTC_ascending[0] / 2.2;
+    Cur_command_R = -imu.DOTC_ascending[1] / 2.2;
+  }
+  else if (assist_mode == 10)
+  {
+    mode = "Collocated Impedance Control (IMU)";
+    cic.CIC_update(imu.LTAVx - imu.RTAVx, -m1.motorAngle * Gear_ratio, m2.motorAngle * Gear_ratio, -m1.speed_value * Gear_ratio, m2.speed_value * Gear_ratio);
+    Cur_command_L = -cic.Cur_command_L; //flexion is + in the CIC class and extension is -.
+    Cur_command_R = cic.Cur_command_R;  //flexion is + in the CIC class and extension is -.
+    //Cur_command_L=0; //current + is extension
+    //Cur_command_R=0; //current + is flexion
+    //plot_cic_IMU_data();
+  }
+  else if (assist_mode == 11)
+  {
+    mode = "Sit-to-Stand (IMU)";
+    Cur_command_L = +imu.STSTorque / 0.232;
+    Cur_command_R = -imu.STSTorque / 0.232;
+  }
+  else if (assist_mode == 100)
+  {
+    mode = "Stop";
+    Cur_command_L = 0;
+    Cur_command_R = 0;
+  }
+}
+
+void Cur_limitation()
+{
+  //************* Current limitation *************//
+
+  Cur_command_L = min(current_limitation, Cur_command_L);
+  Cur_command_L = max(-current_limitation, Cur_command_L);
+  Cur_command_R = min(current_limitation, Cur_command_R);
+  Cur_command_R = max(-current_limitation, Cur_command_R);
+
+  torque_command_L = Cur_command_L * 2.2;
+  torque_command_R = Cur_command_R * 2.2;
+}
+
+void receive_ble_Data()
+{
+  if (Serial4.available() >= 20)
+  {
+    Serial.println("-------------New data received-------------------");
+    data_rs232_rx[0] = Serial4.read();
+    if (data_rs232_rx[0] == 165)
+    {
+      data_rs232_rx[1] = Serial4.read();
+      if (data_rs232_rx[1] == 90)
+      {
+        data_rs232_rx[2] = Serial4.read();
+        if (data_rs232_rx[2] == 20)
+        {
+          Serial4.readBytes(&data_rs232_rx[3], 17);
+          if (data_rs232_rx[3] == 0)
+          {
+            Stop_button = int(data_rs232_rx[4]);
+            if (Stop_button)
+            {
+              Serial.println("STOP button pressed");
+            }
+            else
+            {
+              Serial.println("START button pressed");
+            }
+          }
+          else if (data_rs232_rx[3] == 1)
+          {
+            assist_mode = int(data_rs232_rx[4]);
+            Serial.print("Mode: ");
+            Serial.print(assist_mode);
+            //Serial.print("    ");
+            //Serial.println(mode);
+          }
+          else if (data_rs232_rx[3] == 2)
+          {
+            float Gain_E = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 1000.0;
+            if (assist_mode == 1)
+            {
+              imu.Gain_E = Gain_E;
+            }
+            else if (assist_mode == 3)
+            {
+              encoder.Gain_E = Gain_E;
+            }
+            else if (assist_mode == 8)
+            {
+              imu.Gain_E = Gain_E;
+            }
+            else if (assist_mode == 9)
+            {
+              imu.Gain_E = Gain_E;
+            }
+
+            Serial.print("Extension gain from Matlab: ");
+            Serial.println(Gain_E);
+          }
+          else if (data_rs232_rx[3] == 3)
+          {
+            float Gain_F = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 1000.0;
+            if (assist_mode == 1)
+            {
+              imu.Gain_F = Gain_F;
+            }
+            else if (assist_mode == 3)
+            {
+              encoder.Gain_F = Gain_F;
+            }
+            else if (assist_mode == 8)
+            {
+              imu.beta = Gain_F;
+            }
+            else if (assist_mode == 9)
+            {
+              imu.Gain_F = Gain_F;
+            }
+
+            Serial.print("Flexion gain from matlab: ");
+            Serial.println(Gain_F);
+          }
+          else if (data_rs232_rx[3] == 4)
+          { // 10 ms per timepoint, delaypoint needs to be less than 100
+            // 1 delaypoint in matlab interface equals 5 timepoints here, that is 50 ms
+            int delaypoint = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 1000;
+            if (assist_mode == 1)
+            {
+              imu.delaypoint = delaypoint;
+            }
+            else if (assist_mode == 3)
+            {
+              encoder.delaypoint = delaypoint;
+            }
+            else if (assist_mode == 8)
+            {
+              imu.angleRelativeThreshold = delaypoint; // initial angle is 80 degrees
+            }
+            else if (assist_mode == 9)
+            {
+              imu.delaypoint = delaypoint;
+            }
+
+            Serial.print("Delay [ms]: ");
+            Serial.println(delaypoint * 10);
+            // delay = delaypoint*sample time
+          }
+          else if (data_rs232_rx[3] == 5)
+          {
+            weight = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 1000.0;
+            Serial.print("Weight [kg]: ");
+            Serial.println(weight);
+          }
+          else if (data_rs232_rx[3] == 6)
+          {
+            Insole_gain = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 1000.0;
+            Serial.print("Insole gain: ");
+            Serial.println(Insole_gain);
+          }
+          else if (data_rs232_rx[3] == 7)
+          {
+            Serial. println("The angle of motor has been reset");
+            reset_motor_angle();
+          }
+
+            else if (data_rs232_rx[3] == 11)
+          {
+            float Gain_Sw = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 1000.0;
+            cic.CICGain_L = Gain_Sw;
+            cic.CICGain_R = Gain_Sw;
+            Serial.print("Swing gain from matlab: ");
+            Serial.println(Gain_Sw);
+          }
+            else if (data_rs232_rx[3] == 12)
+          {
+            float Gain_St = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 1000.0;
+            cic.FeedForwardGain_L = Gain_St;
+            cic.FeedForwardGain_R = Gain_St;
+            Serial.print("Stance gain from matlab: ");
+            Serial.println(Gain_St);
+          }
+            else if (data_rs232_rx[3] == 13)
+          {
+            float Timing_Sw = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 1000.0;
+            cic.P_ahead_imp = Timing_Sw;
+            Serial.print("Swing timing from matlab: ");
+            Serial.println(Timing_Sw);
+          }
+            else if (data_rs232_rx[3] == 14)
+          {
+            float Timing_St = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 1000.0;
+            cic.P_ahead_ff = Timing_St;
+            Serial.print("Stance timing from matlab: ");
+            Serial.println(Timing_St);
+          }
+        }
+      }
+    }
+  }
+}
+
+void send_ble_Data()
+{
+  if (assist_mode == 3)
+  {
+    LK_ble = encoder.KneeAngle[0] * 100;
+    RK_ble = encoder.KneeAngle[1] * 100;
+  }
+  else
+  {
+    LK_ble = imu.LKx * 100;
+    RK_ble = imu.RKx * 100;
+  }
+
+  current_command_L_ble = -Cur_command_L * 100; // Gui flexion is positive
+  current_command_R_ble = Cur_command_R * 100;  // Gui flexion is positive
+  current_command_L_ble = -m1.iq_A * 100;
+  current_command_R_ble = m2.iq_A * 100;
+
+  torque_command_L_ble = -torque_command_L * 100; // Gui flexion is positive
+  torque_L_ble = -m1.iq_A * 100;                               //torque_sensor1.torque[0] * 100; // Gui flexion is positive
+
+  torque_command_R_ble = torque_command_R * 100; // Gui flexion is positive
+  torque_R_ble = m2.iq_A * 100;                              //torque_sensor1.torque[1] * 100;  // Gui flexion is positive
+
+  //  gait_percentage_L_ble = imu.gait_percentage_L * 100;
+  gait_percentage_L_ble = 30 * 100;
+
+  insole_torque_command_L_ble = insole.normalized_torque_command_L * 100;
+  insole_torque_command_R_ble = insole.normalized_torque_command_R * 100;
+  insole_gait_percent_L_ble = insole.gait_percent_L * 100;
+  insole_gait_percent_R_ble = insole.gait_percent_R * 100;
+  imu_gait_percent_L_ble = cic.GP_IMU_L_ahead * 100;
+  imu_gait_percent_R_ble = cic.GP_IMU_R_ahead * 100;
+  //
+  imu_gait_percent_imp_L_ble = cic.GP_IMU_L_ahead_imp * 100;
+  imu_gait_percent_imp_R_ble = cic.GP_IMU_R_ahead_imp * 100;
+  imu_gait_percent_ff_L_ble = cic.GP_IMU_L_ahead_ff * 100;
+  imu_gait_percent_ff_R_ble = cic.GP_IMU_R_ahead_ff * 100;
+  //
+  torque_command_imp_L_ble = -cic.impedanceTorque_L * 100;
+  torque_command_imp_R_ble = -cic.impedanceTorque_R * 100;
+  torque_command_ff_L_ble = cic.feedforwardTorque_L * 100;
+  torque_command_ff_R_ble = cic.feedforwardTorque_R * 100;
+
+  ////*** Totally, we send 32byte data
+  // 0    header 165
+  // 1    header 90
+  // 2    bluetooth data length
+  // ...
+
+  data_ble[0] = 165;
+  data_ble[1] = 90;
+  data_ble[2] = datalength_ble;
+  data_ble[3] = LK_ble;
+  data_ble[4] = LK_ble >> 8;
+  data_ble[5] = RK_ble;
+  data_ble[6] = RK_ble >> 8;
+  data_ble[7] = current_command_L_ble;
+  data_ble[8] = current_command_L_ble >> 8;
+  data_ble[9] = current_command_R_ble;
+  data_ble[10] = current_command_R_ble >> 8;
+  data_ble[11] = torque_command_L_ble;
+  data_ble[12] = torque_command_L_ble >> 8;
+  data_ble[13] = torque_command_R_ble;
+  data_ble[14] = torque_command_R_ble >> 8;
+  data_ble[15] = torque_L_ble;
+  data_ble[16] = torque_L_ble >> 8;
+  data_ble[17] = torque_R_ble;
+  data_ble[18] = torque_R_ble >> 8;
+  data_ble[19] = triggerOn;
+  data_ble[20] = triggerVal;
+  data_ble[21] = imu_gait_percent_L_ble;
+  data_ble[22] = imu_gait_percent_L_ble >> 8;
+  data_ble[23] = imu_gait_percent_R_ble;
+  data_ble[24] = imu_gait_percent_R_ble >> 8;
+  data_ble[25] = current_actual_L_ble;
+  data_ble[26] = current_actual_L_ble >> 8;
+  data_ble[27] = current_actual_R_ble;
+  data_ble[28] = current_actual_R_ble >> 8;
+  //
+  // data_ble[25] = imu_gait_percent_imp_L_ble;
+  // data_ble[26] = imu_gait_percent_imp_L_ble >> 8;
+  // data_ble[27] = imu_gait_percent_imp_R_ble;
+  // data_ble[28] = imu_gait_percent_imp_R_ble >> 8;
+  // data_ble[29] = imu_gait_percent_ff_L_ble;
+  // data_ble[30] = imu_gait_percent_ff_L_ble >> 8;
+  // data_ble[31] = imu_gait_percent_ff_R_ble;
+  // data_ble[32] = imu_gait_percent_ff_R_ble >> 8;
+  // //
+  // data_ble[33] = torque_command_imp_L_ble;
+  // data_ble[34] = torque_command_imp_L_ble >> 8;
+  // data_ble[35] = torque_command_imp_R_ble;
+  // data_ble[36] = torque_command_imp_R_ble >> 8;
+  // data_ble[37] = torque_command_ff_L_ble;
+  // data_ble[38] = torque_command_ff_L_ble >> 8;
+  // data_ble[39] = torque_command_ff_R_ble;
+  // data_ble[40] = torque_command_ff_R_ble >> 8;
+  // //
+  // data_ble[41] = insole_gait_percent_L_ble;
+  // data_ble[42] = insole_gait_percent_L_ble >> 8;
+  // data_ble[43] = insole_gait_percent_R_ble;
+  // data_ble[44] = insole_gait_percent_R_ble >> 8;
+  // data_ble[19] = gait_percentage_L_ble;
+  // data_ble[20] = gait_percentage_L_ble >> 8;
+  // data_ble[21] = insole_torque_command_L_ble;
+  // data_ble[22] = insole_torque_command_L_ble >> 8;
+  // data_ble[23] = insole_torque_command_R_ble;
+  // data_ble[24] = insole_torque_command_R_ble >> 8;
+  // data_ble[25] = insole_gait_percent_L_ble;
+  // data_ble[26] = insole_gait_percent_L_ble >> 8;
+  // data_ble[27] = insole_gait_percent_R_ble;
+  // data_ble[28] = insole_gait_percent_R_ble >> 8;
+
+  //  data_ble[29] = torque_commandGP_ble;
+  //  data_ble[30] = torque_commandGP_ble>>8;
+  //  data_ble[31] = imu.isStand;
+  //Serial.println("in");
+  Serial4.write(data_ble, datalength_ble);
+}
+
+//******************Receive high level controller Command****************//
+void receive_serial_Data_Highlevel()
+{
+  if (Serial.available() >= 7)
+  {
+    //Serial.println("receive");
+    data_highlevel_rx[0] = Serial.read();
+    if (data_highlevel_rx[0] == 165)
+    {
+      data_highlevel_rx[1] = Serial.read();
+      if (data_highlevel_rx[1] == 90)
+      {
+        Serial.readBytes(&data_highlevel_rx[2], 5); //int data_rs232_rx[7]
+        //Highlevel_Data_Length_Receive = int(data_highlevel_rx[2]); // read data length
+        Left_Knee_Torque_Command = ((int16_t)(((int16_t)data_highlevel_rx[3]) | ((int16_t)data_highlevel_rx[4] << 8)));
+        Right_Knee_Torque_Command = ((int16_t)(((int16_t)data_highlevel_rx[5]) | ((int16_t)data_highlevel_rx[6] << 8)));
+        Left_Knee_Torque_Command = Left_Knee_Torque_Command / 100;
+        Right_Knee_Torque_Command = Right_Knee_Torque_Command / 100;
+      }
+    }
+  }
+}
+//******************Send high level controller Command****************//
+void send_serial_Data_Highlevel()
+{
+  LK_highlevel = imu.LKx * 100;
+  RK_highlevel = imu.RKx * 100;
+
+  TK_highlevel = imu.TKx * 100;
+  LT_highlevel = imu.LTx * 100;
+  RT_highlevel = imu.RTx * 100;
+  LS_highlevel = imu.LSx * 100;
+  RS_highlevel = imu.RSx * 100;
+  Left_Knee_Torque = torque_sensor1.torque[0] * 100;
+  Right_Knee_Torque = torque_sensor1.torque[1] * 100;
+
+  data_serial_highlevel[0] = 165;
+  data_serial_highlevel[1] = 90;
+  data_serial_highlevel[2] = Highlevel_Data_Length_Send;
+  data_serial_highlevel[3] = Left_Knee_Torque >> 8;
+  data_serial_highlevel[4] = Left_Knee_Torque;
+  data_serial_highlevel[5] = Right_Knee_Torque >> 8;
+  data_serial_highlevel[6] = Right_Knee_Torque;
+  data_serial_highlevel[7] = LK_highlevel >> 8;
+  data_serial_highlevel[8] = LK_highlevel;
+  data_serial_highlevel[9] = RK_highlevel >> 8;
+  data_serial_highlevel[10] = RK_highlevel;
+
+  data_serial_highlevel[11] = LT_highlevel >> 8;
+  data_serial_highlevel[12] = LT_highlevel;
+  data_serial_highlevel[29] = RT_highlevel >> 8;
+  data_serial_highlevel[30] = RT_highlevel;
+  data_serial_highlevel[47] = LS_highlevel >> 8;
+  data_serial_highlevel[48] = LS_highlevel;
+  data_serial_highlevel[65] = RS_highlevel >> 8;
+  data_serial_highlevel[66] = RS_highlevel;
+  data_serial_highlevel[83] = TK_highlevel >> 8;
+  data_serial_highlevel[84] = TK_highlevel;
+
+  Serial.write(data_serial_highlevel, Highlevel_Data_Length_Send);
+}
+void initial_CAN()
+{
+  //initial CAN Bus
+  Can0.begin(1000000, defaultMask, 1, 1);
+  delay(3000);
+  pinMode(28, OUTPUT);
+  digitalWrite(28, LOW);
+  Serial.println("Can bus setup done...");
+}
+void receive_CAN_data()
+{
+  while (Can0.available() > 0)
+  {
+    Can0.read(msgR);
+    if (msgR.id == (ID_offset + Motor_ID1))
+    {
+      m1.DataExplanation(msgR);
+    }
+    else if (msgR.id == (ID_offset + Motor_ID2))
+    {
+      m2.DataExplanation(msgR);
+    }
+  }
+}
+
+//*** Ringbuf ***//
+void logData()
+{
+  // Initialize the SD.
+  if (!sd.begin(SD_CONFIG))
+  {
+    sd.initErrorHalt(&Serial);
+  }
+  // Open or create file - truncate existing file.
+  if (!file.open(LOG_FILENAME, O_RDWR | O_CREAT | O_TRUNC))
+  {
+    Serial.println("open failed\n");
+    return;
+  }
+  // File must be pre-allocated to avoid huge
+  // delays searching for free clusters.
+  if (!file.preAllocate(LOG_FILE_SIZE))
+  {
+    Serial.println("preAllocate failed\n");
+    file.close();
+    return;
+  }
+  // initialize the RingBuf.
+  rb.begin(&file);
+  Serial.println("Type any character to stop");
+
+  // Max RingBuf used bytes. Useful to understand RingBuf overrun.
+  size_t maxUsed = 0;
+
+  // Min spare micros in loop.
+  int32_t minSpareMicros = INT32_MAX;
+
+  // Start time.
+  uint32_t logTime = micros();
+  // Log data until Serial input or file full.
+  while (!Serial.available())
+  {
+    // Amount of data in ringBuf.
+    size_t n = rb.bytesUsed();
+    if ((n + file.curPosition()) > (LOG_FILE_SIZE - 20))
+    {
+      Serial.println("File full - quitting.");
+      break;
+    }
+    if (n > maxUsed)
+    {
+      maxUsed = n;
+    }
+    if (n >= 512 && !file.isBusy())
+    {
+      // Not busy only allows one sector before possible busy wait.
+      // Write one sector from RingBuf to file.
+      if (512 != rb.writeOut(512))
+      {
+        Serial.println("writeOut failed");
+        break;
+      }
+    }
+    // Time for next point.
+    logTime += LOG_INTERVAL_USEC;
+    int32_t spareMicros = logTime - micros();
+    if (spareMicros < minSpareMicros)
+    {
+      minSpareMicros = spareMicros;
+    }
+    if (spareMicros <= 0)
+    {
+      Serial.print("Rate too fast ");
+      Serial.println(spareMicros);
+      break;
+    }
+    // Wait until time to log data.
+    while (micros() < logTime)
+    {
+    }
+
+    // Read ADC0 - about 17 usec on Teensy 4, Teensy 3.6 is faster.
+    uint16_t adc = analogRead(0);
+    // Print spareMicros into the RingBuf as test data.
+    rb.print(spareMicros);
+    rb.write(',');
+    // Print adc into RingBuf.
+    rb.println(adc);
+    if (rb.getWriteError())
+    {
+      // Error caused by too few free bytes in RingBuf.
+      Serial.println("WriteError");
+      break;
+    }
+  }
+  // Write any RingBuf data to file.
+  rb.sync();
+  file.truncate();
+  file.rewind();
+  // Print first twenty lines of file.
+  Serial.println("spareMicros,ADC0");
+  for (uint8_t n = 0; n < 20 && file.available();)
+  {
+    int c = file.read();
+    if (c < 0)
+    {
+      break;
+    }
+    Serial.write(c);
+    if (c == '\n')
+      n++;
+  }
+  Serial.print("fileSize: ");
+  Serial.println((uint32_t)file.fileSize());
+  Serial.print("maxBytesUsed: ");
+  Serial.println(maxUsed);
+  Serial.print("minSpareMicros: ");
+  Serial.println(minSpareMicros);
+  file.close();
+}
+
+void logData2()
+{
+  // Max RingBuf used bytes. Useful to understand RingBuf overrun.
+  size_t maxUsed = 0;
+
+  // Min spare micros in loop.
+  int32_t minSpareMicros = INT32_MAX;
+
+  // Start time.
+  uint32_t logTime = micros();
+  // Log data until Serial input or file full.
+  //  while (!Serial.available()) {
+  // Amount of data in ringBuf.
+  size_t n = rb.bytesUsed();
+  if ((n + file.curPosition()) > (LOG_FILE_SIZE - 20))
+  {
+    Serial.println("File full - quitting.");
+    return; // break;
+  }
+  if (n > maxUsed)
+  {
+    maxUsed = n;
+  }
+  if (n >= 512 && !file.isBusy())
+  {
+    // Not busy only allows one sector before possible busy wait.
+    // Write one sector from RingBuf to file.
+    if (512 != rb.writeOut(512))
+    {
+      Serial.println("writeOut failed");
+      return; //break;
+    }
+  }
+  
+     rb.print(relTime);
+     rb.write(" ");
+     rb.print(imu.LTAVx);
+     rb.write(" ");
+     rb.print(imu.RTAVx);
+     rb.write(" ");
+     rb.print(imu.LTx);
+     rb.write(" ");
+     rb.print(cic.TA_filter);
+     rb.write(" ");
+     rb.print(cic.qTd_L);
+     rb.write(" ");
+     rb.print(cic.qTd_L_mean);
+     rb.write(" ");
+     rb.print(cic.qTd_L_std);
+     rb.write(" ");
+     rb.print(cic.dqTd_L);
+     rb.write(" ");
+     rb.print(cic.dqTd_L_std);
+     rb.write(" ");
+     rb.print(cic.w);
+     rb.write(" ");
+     rb.print(cic.dqTd_L_nor);
+     rb.write(" ");
+     rb.print(cic.qTd_L_nor);
+     rb.write(" ");
+     rb.print(cic.GP_IMU_L);
+     rb.write(" ");
+     rb.print(cic.GP_IMU_L_Pre);
+     rb.write(" ");
+     rb.print(cic.delta_GP_IMU_L);
+     rb.write(" ");
+     rb.print(cic.mag);
+     rb.write(" ");
+     rb.println(cic.state);
+    //  rb.print("\n");
+  // Print adc into RingBuf.
+  //  rb.println(adc);
+  if (rb.getWriteError())
+  {
+    // Error caused by too few free bytes in RingBuf.
+    Serial.println("WriteError");
+    return; //break;
+  }
+  
+}
+
+void logData3()
+{
+  // Max RingBuf used bytes. Useful to understand RingBuf overrun.
+  size_t maxUsed = 0;
+
+  // Min spare micros in loop.
+  int32_t minSpareMicros = INT32_MAX;
+
+  // Start time.
+  uint32_t logTime = micros();
+  // Log data until Serial input or file full.
+  //  while (!Serial.available()) {
+  // Amount of data in ringBuf.
+  size_t n = rb.bytesUsed();
+  if ((n + file.curPosition()) > (LOG_FILE_SIZE - 20))
+  {
+    Serial.println("File full - quitting.");
+    return; // break;
+  }
+  if (n > maxUsed)
+  {
+    maxUsed = n;
+  }
+  if (n >= 512 && !file.isBusy())
+  {
+    // Not busy only allows one sector before possible busy wait.
+    // Write one sector from RingBuf to file.
+    if (512 != rb.writeOut(512))
+    {
+      Serial.println("writeOut failed");
+      return; //break;
+    }
+  }
+  // Time for next point.
+  //  logTime += LOG_INTERVAL_USEC;
+  //  int32_t spareMicros = logTime - micros();
+  //  if (spareMicros < minSpareMicros) {
+  //    minSpareMicros = spareMicros;
+  //  }
+  //  if (spareMicros <= 0) {
+  //    Serial.print("Rate too fast ");
+  //    Serial.println(spareMicros);
+  //    break;
+  //  }
+  // Wait until time to log data.
+  //  while (micros() < logTime) {}
+
+  // Read ADC0 - about 17 usec on Teensy 4, Teensy 3.6 is faster.
+  //  uint16_t adc = analogRead(0);
+  // Print spareMicros into the RingBuf as test data.
+     rb.print(relTime);
+     rb.write(" ");
+     rb.print(imu.TKx);
+     rb.write(" ");
+     rb.print(imu.TKy);
+     rb.write(" ");
+     rb.print(imu.TKz);
+     rb.write(" ");
+     rb.print(imu.LTx);
+     rb.write(" ");
+     rb.print(imu.LTy);
+     rb.write(" ");
+     rb.print(imu.LTz);
+     rb.write(" ");
+     rb.print(imu.RTx);
+     rb.write(" ");
+     rb.print(imu.RTy);
+     rb.write(" ");
+     rb.print(imu.RTz);
+     rb.write(" ");
+     rb.print(imu.LSx);
+     rb.write(" ");
+     rb.print(imu.LSy);
+     rb.write(" ");
+     rb.print(imu.LSz);
+     rb.write(" ");
+     rb.print(imu.RSx);
+     rb.write(" ");
+     rb.print(imu.RSy);
+     rb.write(" ");
+     rb.print(imu.RSz);
+     rb.write(" ");
+     rb.print(imu.TKAVx);
+     rb.write(" ");
+     rb.print(imu.TKAVy);
+     rb.write(" ");
+     rb.print(imu.TKAVz);
+     rb.write(" ");
+     rb.print(imu.LTAVx);
+     rb.write(" ");
+     rb.print(imu.LTAVy);
+     rb.write(" ");
+     rb.print(imu.LTAVz);
+     rb.write(" ");
+     rb.print(imu.RTAVx);
+     rb.write(" ");
+     rb.print(imu.RTAVy);
+     rb.write(" ");
+     rb.print(imu.RTAVz);
+     rb.write(" ");
+     rb.print(imu.LSAVx);
+     rb.write(" ");
+     rb.print(imu.LSAVy);
+     rb.write(" ");
+     rb.print(imu.LSAVz);
+     rb.write(" ");
+     rb.print(imu.RSAVx);
+     rb.write(" ");
+     rb.print(imu.RSAVy);
+     rb.write(" ");
+     rb.print(imu.RSAVz);
+     rb.write(" ");
+     rb.print(cic.GP_IMU_L);
+     rb.write(" ");
+     rb.print(cic.GP_IMU_R);
+     rb.write(" ");
+     rb.print(Cur_command_L);
+     rb.write(" ");
+     rb.print(Cur_command_R);
+     rb.write(" ");
+     rb.print(m1.iq_A);
+     rb.write(" ");
+     rb.print(m2.iq_A);
+     rb.write(" ");
+     rb.print(m1.motorAngle);
+     rb.write(" ");
+     rb.print(m2.motorAngle);
+     rb.write(" ");
+     rb.print(m1.speed_value);
+     rb.write(" ");
+     rb.println(m2.speed_value);
+    //  rb.print("\n");
+  // Print adc into RingBuf.
+  //  rb.println(adc);
+  if (rb.getWriteError())
+  {
+    // Error caused by too few free bytes in RingBuf.
+    Serial.println("WriteError");
+    return; //break;
+  }
+  
+}
+
+void clearSerialInput()
+{
+  for (uint32_t m = micros(); micros() - m < 10000;)
+  {
+    if (Serial.read() >= 0)
+    {
+      m = micros();
+    }
+  }
+}
+
+//**************Plot Data*****************//
+void plot_cic_IMU_data()
+{
+  Serial.print(imu.LTx);
+  Serial.print("  ");
+  Serial.print(imu.RTx);
+  Serial.print("  ");
+  Serial.print(imu.LTAVx);
+  Serial.print("  ");
+  Serial.print(imu.RTAVx);
+  Serial.print("  ");
+  Serial.print(cic.GP_IMU_L);
+  Serial.print("  ");
+  Serial.print(cic.GP_IMU_R);
+  Serial.print("  ");
+  Serial.print(cic.qTd_L_nor);
+  Serial.print("  ");
+  Serial.print(cic.dqTd_L_nor);
+  Serial.print("  ");
+  Serial.print(insole.gait_percent_L);
+  Serial.print("  ");
+  Serial.println(insole.gait_percent_R);
+
+  //  Serial.print(imu.LTx);
+  //  Serial.print("  ");
+  //  Serial.print(imu.RTx);
+  //  Serial.print("  ");
+  //  Serial.print(imu.LTAVx);
+  //  Serial.print("  ");
+  //  Serial.print(imu.RTAVx);
+  //  Serial.print("  ");
+  //  Serial.print(imu.LTAVx);
+  //  Serial.print("  ");
+  //  Serial.print(imu.LTAVy);
+  //  Serial.print("  ");
+  //  Serial.print(imu.LTAVz);
+  //  Serial.print("  ");
+  //  Serial.print(imu.RTAVx);
+  //  Serial.print("  ");
+  //  Serial.print(imu.RTAVy);
+  //  Serial.print("  ");
+  //  Serial.println(imu.RTAVz);
+}
+void plot_cic_std()
+{
+  Serial.print(cic.qTd_L_nor);
+  Serial.print("  ");
+  Serial.print(cic.dqTd_L_nor);
+  Serial.print("  ");
+  Serial.println(cic.mag * 10);
+}
+void plot_cic_data()
+{
+  //Serial.print(m1.motorAngle);
+  //  Serial.print(cic.qm_R / 9);
+  //  Serial.print("  ");
+  //  Serial.print(cic.qhr_R);
+  //  Serial.print("  ");
+  //  Serial.print(cic.GP_IMU_L/10);
+  //  Serial.print("  ");
+  //  Serial.println(cic.Cur_command_L * 0.232 * 9);
+  // Serial.print("  ");
+  //
+  //   Serial.print(cic.Cur_command_L * 10);
+  //   Serial.print("  ");
+  //   Serial.print(cic.Cur_command_R * 10);
+  //   Serial.print("  ");
+  // Serial.print(cic.kd_L);
+  // Serial.print("  ");
+  // Serial.println(cic.kd_L_Junxi);
+//  Serial.print(cic.GP_IMU_L);
+//  Serial.print("  ");
+//  Serial.print(Cur_command_L);
+//  Serial.print("  ");
+//  Serial.print(Cur_command_R);
+//  Serial.print("  ");
+//  Serial.print(m1.iq_A);
+//  Serial.print("  ");
+//  Serial.print(m2.iq_A);
+//  Serial.print("  ");
+  Serial.print(cic.CICGain_L);
+  Serial.print("  ");
+  Serial.print(cic.kd_torque_L);
+  Serial.print("  ");
+  Serial.println(cic.bd_torque_L);
+//   Serial.print(imu.LTx);
+//   Serial.print("  ");
+  // Serial.print(cic.mag * 10);
+  // Serial.print("  ");
+  // Serial.println(cic.GP_IMU_L);
+  //   Serial.print("  ");
+  //   Serial.println(cic.GP_IMU_R);
+}
+
+void plot_debug_data()
+{
+  char str8[8];
+  // sprintf(str8,"%03.2f",imu.LTAVx);
+  dtostrf(imu.LTAVx, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(imu.RTAVx, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(imu.LTAVx - imu.RTAVx, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.TA_filter, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.qTd_L, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.qTd_L_mean, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.qTd_L_std, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.dqTd_L, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.dqTd_L_std, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.w, 5, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(-cic.dqTd_L_nor, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.qTd_L_nor, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.GP_IMU_L, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.GP_IMU_L_Pre, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.delta_GP_IMU_L, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.mag, 7, 2, str8);
+  Serial.print(str8);
+  Serial.print("  ");
+  dtostrf(cic.state, 7, 2, str8);
+  Serial.println(str8);
+}
+
+void save_debug_data_SDCard()
+{
+  //  File dataFile = SD.open("walking.txt", FILE_WRITE);
+  //  static int counter = 0;
+  //  static pool =
+  SDcounter += 1;
+  SDtotalCounter++;
+  //    insertBuffer(relTime);
+  //    insertBuffer(" ");
+  //    insertBuffer(imu.LTAVx);
+  //    insertBuffer(" ");
+  //    insertBuffer(imu.RTAVx);
+  //    insertBuffer(" ");
+  //    insertBuffer(imu.LTAVx - imu.RTAVx);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.TA_filter);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.qTd_L);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.qTd_L_mean);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.qTd_L_std);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.dqTd_L);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.dqTd_L_std);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.w);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.dqTd_L_nor);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.qTd_L_nor);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.GP_IMU_L);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.GP_IMU_L_Pre);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.delta_GP_IMU_L);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.mag);
+  //    insertBuffer(" ");
+  //    insertBuffer(cic.state);
+  //    insertBuffer("\n");
+  //    if (charBufferPosition > charBufferSize - 2000 && SDtotalCounter < 500*20+1){
+  //      File dataFile = SD.open("walking.txt", FILE_WRITE);
+  //      dataFile.write(charBuffer,charBufferPosition);
+  //      for(long idx=0;idx<charBufferSize;idx++){
+  //        charBuffer[idx] = ' ';
+  //      }
+  //      dataFile.close();
+  //      SDcounter = 0;
+  //      charBufferPosition = 0;
+  //    }
+
+  //    dataBuffer += relTime;
+  //    dataBuffer += " ";
+  //    dataBuffer += imu.LTAVx;
+  //    dataBuffer += " ";
+  //    dataBuffer += imu.RTAVx;
+  //    dataBuffer += " ";
+  //    dataBuffer += imu.LTAVx - imu.RTAVx;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.TA_filter;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.qTd_L;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.qTd_L_mean;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.qTd_L_std;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.dqTd_L;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.dqTd_L_std;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.w;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.dqTd_L_nor;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.qTd_L_nor;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.GP_IMU_L;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.GP_IMU_L_Pre;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.delta_GP_IMU_L;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.mag;
+  //    dataBuffer += " ";
+  //    dataBuffer += cic.state;
+  //    dataBuffer += "\n";
+  //    if (SDcounter == 100 && SDtotalCounter < 500*20+1){
+  //      File dataFile = SD.open("walking.txt", FILE_WRITE);
+  //      dataFile.print(dataBuffer);
+  //      dataBuffer = "";
+  //      dataFile.close();
+  //      SDcounter = 0;
+  //    }
+  //  if (dataFile && SDtotalCounter < 500*20+1) {
+  //    dataFile.print(relTime);
+  //    dataFile.print(" ");
+  //    dataFile.print(imu.LTAVx);
+  //    dataFile.print(" ");
+  //    dataFile.print(imu.RTAVx);
+  //    dataFile.print(" ");
+  //    dataFile.print(imu.LTAVx - imu.RTAVx);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.TA_filter);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.qTd_L);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.qTd_L_mean);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.qTd_L_std);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.dqTd_L);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.dqTd_L_std);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.w);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.dqTd_L_nor);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.qTd_L_nor);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.GP_IMU_L);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.GP_IMU_L_Pre);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.delta_GP_IMU_L);
+  //    dataFile.print(" ");
+  //    dataFile.print(cic.mag);
+  //    dataFile.print(" ");
+  //    dataFile.println(cic.state);
+  //    if (SDtotalCounter % 1000 == 0){
+  //      dataFile.flush();
+  //    }
+  ////    dataFile.println(" ");
+  //  }else {
+  //     dataFile.close();
+  //  }
+}
+
+void insertBuffer(double inputD)
+{
+  String input = String(inputD, 2);
+  long inputSize = input.length() + 1;
+  char tempArr[inputSize];
+  input.toCharArray(tempArr, inputSize);
+  strcpy(&charBuffer[charBufferPosition], &tempArr[0]);
+  charBufferPosition += inputSize + 1;
+}
+
+void insertBuffer(String input)
+{
+  long inputSize = input.length() + 1;
+  char tempArr[inputSize];
+  input.toCharArray(tempArr, inputSize);
+  strcpy(&charBuffer[charBufferPosition], &tempArr[0]);
+  charBufferPosition += inputSize + 1;
+}
+
+void plot_cic_torque_current_data()
+{
+  Serial.print(cic.Cur_command_L);
+  Serial.print("  ");
+  Serial.println(cic.T_command_L);
+}
+
+void plot_cic_torque_data()
+{
+  Serial.print(cic.impedanceTorque_L);
+  Serial.print("  ");
+  Serial.print(cic.feedforwardTorque_L);
+  Serial.print("  ");
+  Serial.print(cic.T_command_L);
+  Serial.print("  ");
+  Serial.print(cic.GP_IMU_L_ahead);
+  Serial.print("  ");
+  Serial.print(cic.impedanceTorque_R);
+  Serial.print("  ");
+  Serial.print(cic.feedforwardTorque_R);
+  Serial.print("  ");
+  Serial.print(cic.T_command_R);
+  Serial.print("  ");
+  Serial.println(cic.GP_IMU_R_ahead);
+}
+
+void plot_cic_gait_phase_data()
+{
+  Serial.print(cic.GP_IMU_L_ahead);
+  Serial.print("  ");
+  Serial.print(cic.GP_IMU_R_ahead);
+  Serial.print("  ");
+  Serial.print(cic.GP_IMU_L);
+  Serial.print("  ");
+  Serial.print(cic.GP_IMU_R);
+  Serial.print("  ");
+  Serial.println(cic.P_ahead);
+}
+
+void plot_trigger_data()
+{
+  Serial.println(triggerVal);
+}
+
+void plot_motor_data()
+{
+  //  Serial.print(m1.motorAngle); // angle unit: degree
+  //  Serial.print("  ");
+  //  Serial.print(m2.motorAngle);// angle unit: degree
+  //  Serial.print("  ");
+
+  Serial.print(encoder.DOFC[0]); // angle unit: degree
+  Serial.print("  ");
+  Serial.print(encoder.DOFC[1]); // angle unit: degree
+  Serial.print("  ");
+  //  Serial.print(m1.speed_value);// angle velocity unit: degree per second
+  //  Serial.print("  ");
+  //  Serial.println(m2.speed_value); // angle velocity unit: degree per second
+  //  Serial.print("  ");
+  Serial.print(m1.motorAngle); //plot right shank angle (deg)
+  Serial.print("  ");
+  Serial.println(m2.motorAngle); //plot left knee angle (deg)
+}
+
+void plot_insole_data()
+{
+  //  Serial.print(insole.heel_L);
+  //  Serial.print("  ");
+  //  Serial.print(insole.toe_L);
+  //  Serial.print("  ");
+  //  Serial.print(insole.mid1_L);
+  //  Serial.print("  ");
+  //  Serial.print(insole.mid2_L);
+  //  Serial.print("  ");
+  //  Serial.print(insole.heel_R);
+  //  Serial.print("  ");
+  //  Serial.print(insole.toe_R);
+  //  Serial.print("  ");
+  //  Serial.print(insole.mid1_R);
+  //  Serial.print("  ");
+  //  Serial.println(insole.mid2_R);
+  // Serial.print(insole.normalized_torque_command_L * 80);
+  // Serial.print("  ");
+  // Serial.print(insole.normalized_torque_command_R * 80);
+  // Serial.print("  ");
+  Serial.print(insole.gait_percent_L);
+  Serial.print("  ");
+  Serial.println(insole.gait_percent_R);
+}
+
+void plot_torque_sensor_data()
+{
+  //*** torque_sensor1.torque[0] is the first channel ADC value, [1] is the second ADC value. it can be righ leg or left leg torque sensor, it depends on the connection.
+  //*** Here we conncet torque_sensor1.torque[0] to right leg. (the definition is different form the IMU and control (1: righ leg 0:left leg))
+  Serial.print(torque_sensor1.torque[1]); // plot actual torque from ADC channel 0
+  Serial.print(" ");
+  Serial.println(torque_sensor1.torque[1]); // plot actual torque from ADC channel 1
+}
+
+void plot_imu_data()
+{
+  //  Serial.print(imu.TKx); //plot left thigh angle (deg)
+  //  Serial.print("  ");
+  //  Serial.print(imu.LTx); //plot left thigh angle (deg)
+  //  Serial.print("  ");
+  //  Serial.print(imu.RTx); //plot right thigh angle (deg)
+  //  Serial.print("  ");
+  //  Serial.print(imu.LSx); //plot left shank angle (deg)
+  //  Serial.print("  ");
+  //  Serial.print(imu.RSx); //plot right shank angle (deg)
+  //  Serial.print("  ");
+  //  Serial.print(imu.LKx); //plot left knee angle (deg)
+  //  Serial.print("  ");
+  //  Serial.println(imu.RKx); //plot right knee angle (deg)
+
+  // Serial.print(Cur_command_L); //plot right shank angle (deg)
+  // Serial.print("  ");
+  // Serial.print(Cur_command_R); //plot left knee angle (deg)
+  // Serial.print("  ");
+  // Serial.print(imu.TKx); //plot right knee angle (deg)
+  // Serial.print("  ");
+  // Serial.print(imu.LTx); //plot right knee angle (deg)
+  // Serial.print("  ");
+  // Serial.print(imu.RTx);
+  // Serial.print("  ");
+  // Serial.print(imu.LSx);
+  // Serial.print("  ");
+  // Serial.print(imu.RSx);
+  // Serial.print("  ");
+  Serial.print(cic.GP_IMU_L/10);
+  Serial.print("  ");
+  Serial.print(cic.GP_IMU_R/10);
+  Serial.print("  ");
+  Serial.print(cic.T_command_L*9);
+  Serial.print("  ");
+  Serial.println(cic.T_command_R*9);
+  // Serial.print("  ");
+  // Serial.print(imu.TKAVx); //plot right knee angle (deg)
+  // Serial.print("  ");
+  // Serial.print(imu.LTAVx); //plot right knee angle (deg)
+  // Serial.print("  ");
+  // Serial.print(imu.RTAVx);
+  // Serial.print("  ");
+  // Serial.print(imu.LSAVx);
+  // Serial.print("  ");
+  // Serial.println(imu.RSAVx);
+  //  Serial.print(torque_command_L); //plot right knee angle (deg)
+  //  Serial.print("  ");
+  //  Serial.println(torque_command_R); //plot right knee angle (deg)
+}
+
+void plot_controler_data()
+{
+  Serial.print(m1.iq_A * 10); //plot actual current
+  Serial.print("  ");
+  Serial.print(Cur_command_R * 10); //plot current_command(A)*10
+  Serial.print("  ");
+  Serial.print(imu.RLKx_delay[imu.currentpoint]); //plot current angle difference (left knee angle - righ knee angle)
+  Serial.print("  ");
+  Serial.println(imu.DOTC[1] * 10); //plot right leg torque command *10 of delay output feedback control
+}
+
+void plot_squat_data()
+{
+  // Serial.print(current_time);
+  // Serial.print(" ");
+  Serial.print(imu.LKx);
+  Serial.print(" ");
+  Serial.println(imu.SquatTorque);
+}
+
+void plot_STS_data()
+{
+  // Serial.print(current_time);
+  // Serial.print(" ");
+  Serial.print(imu.LKx);
+  Serial.print(" ");
+  Serial.print(Cur_command_L);
+  Serial.print(" ");
+  Serial.println(imu.STSTorque*9);
+}
+
+void reset_motor_angle()
+{
+  for (int i = 0; i < 20; i++)
+  {
+    m1.read_multi_turns_angle();
+    delay(10);
+    receive_CAN_data();
+    m1.motorAngle_offset = m1.motorAngle_raw;
+    m2.read_multi_turns_angle();
+    delay(10);
+    receive_CAN_data();
+    m2.motorAngle_offset = m2.motorAngle_raw;
+  }
+}
