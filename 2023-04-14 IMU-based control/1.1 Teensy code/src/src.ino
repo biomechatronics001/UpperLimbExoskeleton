@@ -47,21 +47,26 @@ CAN_message_t msgR;
 struct CAN_filter_t defaultMask;
 uint32_t ID_offset = 0x140;
 
+///////////////////////////////////////////////////////
+
 char user_sex = 'M'; // M for male, F for female
 float user_weight = 70; // [kg]
 float user_height = 1.70; // [m]
 
 int assist_mode = 3;
-String mode = "start";
-
-double Gear_ratio = 6; //The actuator gear ratio, will enfluence actuator angle and angular velocity
-double Torque_const = 1.67; // Torque constant already takes into account the gear ratio
 
 double Gain_L = 1;
 double Gain_R = 1;
 double Gain_common = 0.3;
 
 int current_limitation = 5;  //(unit Amp)
+
+///////////////////////////////////////////////////////
+
+String mode = "start";
+
+double Gear_ratio = 6; //The actuator gear ratio, will enfluence actuator angle and angular velocity
+double Torque_const = 1.67; // Torque constant already takes into account the gear ratio
 
 int Stop_button = 0;    // Stop function
 int saveDataFlag = 1;
