@@ -419,6 +419,7 @@ void Compute_Cur_Commands()
   }
   else if (assist_mode == 3)
   {
+    mode = "Gravity Compensation";
     //arm_abduction_L = -imu.LTx;
     //arm_flexion_L = -imu.LTz;
     //arm_abduction_R = -imu.RTx;
@@ -468,7 +469,7 @@ void Compute_Cur_Commands()
   }
   else if (assist_mode == 100)
   {
-    mode = "Stop";
+    mode = "Zero Current";
     Cur_command_L = 0;
     Cur_command_R = 0;
   }
