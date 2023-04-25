@@ -47,7 +47,7 @@ CAN_message_t msgR;
 struct CAN_filter_t defaultMask;
 uint32_t ID_offset = 0x140;
 
-char user_genre = 'M'; // M for male, F for female
+char user_sex = 'M'; // M for male, F for female
 float user_weight = 70; // [kg]
 float user_height = 1.70; // [m]
 
@@ -221,7 +221,7 @@ void setup()
   
   delay(500);
 
-  if (user_genre == 'M')
+  if (user_sex == 'M')
   {
     ua_wc = 3.25/100;
     ua_hc = 17.2/100;
@@ -235,7 +235,7 @@ void setup()
     h_hc = 5.75/100;
     h_COMc = 46.8/100;
   }
-  else if (user_genre == 'F')
+  else if (user_sex == 'F')
   {
     ua_wc = 2.9/100;
     ua_hc = 17.3/100;
