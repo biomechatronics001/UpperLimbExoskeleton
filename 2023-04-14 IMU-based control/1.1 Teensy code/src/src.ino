@@ -51,7 +51,7 @@ uint32_t ID_offset = 0x140;
 
 char user_sex = 'M'; // M for male, F for female
 float user_weight = 70; // [kg]
-float user_height = 1.70; // [m]
+float user_height = 1.75; // [m]
 
 int assist_mode = 3;
 
@@ -329,7 +329,7 @@ void CurrentControl()
 
     //Compute_Torque_Commands();
 
-    print_Data();
+    //print_Data();
     //print_Current_Data();
     //print_Torque_Data();   
     //print_IMU_Data();
@@ -564,11 +564,25 @@ void receive_ble_Data()
           }
           else if (data_rs232_rx[3] == 5)
           {
+            user_height = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 100.0;
+            Serial.print("User height [m]: ");
+            Serial.println(user_height);
           }
           else if (data_rs232_rx[3] == 6)
           {
+            user_weight = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 10.0;
+            Serial.print("User weight [kg]: ");
+            Serial.println(user_weight);
           }
           else if (data_rs232_rx[3] == 7)
+          {
+            int sex_value = int(data_rs232_rx[4]);
+            if (sex_value == 0){user_sex = 'M';}
+            else if (sex_value == 1){user_sex = 'F';}
+            Serial.print("User sex: ");
+            Serial.println(user_sex);
+          }
+          else if (data_rs232_rx[3] == 10)
           {
             reset_motor_angle();
             Serial.println("The angle of motor has been reset");
