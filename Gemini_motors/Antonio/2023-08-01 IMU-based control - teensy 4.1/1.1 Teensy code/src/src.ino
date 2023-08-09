@@ -4,7 +4,7 @@
 #include <FlexCAN_T4.h>
 #include <Arduino.h>
 
-#include <SPI.h>
+//#include <SPI.h>
 #include "WL_IMU.h"
 #include <stdio.h>
 //#include "ads1292r.h"
@@ -31,9 +31,7 @@
 // #define RING_BUF_CAPACITY 400 * 512 * 10 / 50 // Space to hold more than 800 ms of data for 10 byte lines at 25 ksps.
 #define RING_BUF_CAPACITY 250 * 500 * 1 // Space to hold more than 800 ms of data for 10 byte lines at 25 ksps.
 
-// #define LOG_FILENAME "Walking.csv"
-//#define LOG_FILENAME "0407_Powered_Jennifer_Walking_bd0.04_0.00_kd_1_0.6_0_0_0_0_newtau.csv"
-#define LOG_FILENAME "2022-05-24-Weibo-Walking_Powered_06.csv"
+#define LOG_FILENAME "2023-08-08-Weibo_test1.csv"
 
 SdFs sd;
 FsFile file;
@@ -59,18 +57,18 @@ float user_height = 1.75; // [m]
 
 int assist_mode = 3;
 
-double Gain_L = 1;
-double Gain_R = 1;
-double Gain_common = 0.3;
+float Gain_L = 1;
+float Gain_R = 1;
+float Gain_common = 0.3;
 
-int current_limitation = 5;  //(unit Amp)
+float current_limitation = 5;  //(unit Amp)
 
 ///////////////////////////////////////////////////////
 
 String mode = "start";
 
-double Gear_ratio = 9; //The actuator gear ratio, will enfluence actuator angle and angular velocity
-double Torque_const = 2.6; // Torque constant already takes into account the gear ratio
+float Gear_ratio = 9; //The actuator gear ratio, will enfluence actuator angle and angular velocity
+float Torque_const = 2.09; // Torque constant already takes into account the gear ratio
 uint16_t Maxspeed_position = 500;
 
 int Stop_button = 0;    // Stop function
@@ -155,9 +153,9 @@ double torque_command_L = 0;
 double torque_command_R = 0;
 
 // Trigger
-int triggerOn = 0;
-int triggerPin = A9; //reading pin
-int triggerVal = 0;  // analog trigger pin value
+//int triggerOn = 0;
+//int triggerPin = A9; //reading pin
+//int triggerVal = 0;  // analog trigger pin value
 
 // Data logging
 int isLogging = 0;
@@ -264,13 +262,13 @@ void setup()
   h_length = user_height*h_hc;
   h_moment_arm = ua_length + fa_length + h_length*h_COMc;
   
-  imu.Gain_E = 1;         //Extension gain for delay output feedback control
-  imu.Gain_F = 1;         //Flexion gain for delay output feedback control  DOFC.Gain_E = 10;            //Extension gain for delay output feedback control
-  imu.STS_Gain = 0;
-  imu.delaypoint = 0;     //realative to delay time (delaypoint*sampletime=delaytime) for delay output feedback control
-  imu.alpha = 5;
-  imu.beta = 2;
-  imu.angleRelativeThreshold = 20;
+//  imu.Gain_E = 1;         //Extension gain for delay output feedback control
+//  imu.Gain_F = 1;         //Flexion gain for delay output feedback control  DOFC.Gain_E = 10;            //Extension gain for delay output feedback control
+//  imu.STS_Gain = 0;
+//  imu.delaypoint = 0;     //realative to delay time (delaypoint*sampletime=delaytime) for delay output feedback control
+//  imu.alpha = 5;
+//  imu.beta = 2;
+//  imu.angleRelativeThreshold = 20;
 
   // torque_sensor1.Torque_sensor_initial();                                           //initial the torque sensor see ads1292r.cpp.
   // torque_sensor1.Torque_sensor_gain(0.0003446 * (-1) * 2, 0.0003446 * (-1) * 2.35); //set the calibration gain for torque sensor. Torque= gain* ADCvalue+offset.see ads1292r.cpp.
@@ -293,8 +291,8 @@ void setup()
   previous_time_ble = current_time;
 
   // init trigger
-  pinMode(triggerPin, INPUT);
-  pinMode(A8, OUTPUT);  
+//  pinMode(triggerPin, INPUT);
+//  pinMode(A8, OUTPUT);  
 }
 
 void loop()
@@ -307,7 +305,8 @@ void loop()
 void CurrentControl()
 {
   ////******IMU+Current Control Example Torque Constant 0.6 Nm/A**********////////
-  imu.READ();                          //Check if IMU data available and read it. the sample rate is 100 hz
+  imu.READ();
+  //Check if IMU data available and read it. the sample rate is 100 hz
   // torque_sensor1.Torque_sensor_read(); //Check if torque sensor1 is available // Vahid
   current_time = micros();             //query current time (microsencond)
 
@@ -327,30 +326,39 @@ void CurrentControl()
 
     //Compute_Torque_Commands();
 
-    print_data();
+    Serial.print(imu.LTx); Serial.print(" ");
+    Serial.print(imu.RTx); Serial.print(" ");
+    Serial.print(arm_elevation_L); Serial.print("  ");
+    Serial.print(arm_elevation_R); Serial.print("  ");
+    Serial.print(Cur_command_L); Serial.print("  ");
+    Serial.print(Cur_command_R); Serial.print("  ");
+    Serial.print(m1.motorAngle); Serial.print("  "); // angle unit: degree 
+    Serial.print(m2.motorAngle); Serial.print("  "); // angle unit: degree
+    Serial.println();
+    //print_data();
     //print_Current_Data();
     //print_Torque_Data();   
     //print_IMU_Data();
 
     m1.send_current_command(Cur_command_L);
-    custom_wait();
+    custom_wait_loop();
     m1.receive_CAN_data();
-    custom_wait2();
+    custom_wait_delay();
     
     m1.read_multi_turns_angle(); //read angle and angle velocity
-    custom_wait();
+    custom_wait_loop();
     m1.receive_CAN_data();
-    custom_wait2();
+    custom_wait_delay();
     
     m2.send_current_command(Cur_command_R);
-    custom_wait();
+    custom_wait_loop();
     m2.receive_CAN_data();
-    custom_wait();
+    custom_wait_loop();
 
     m2.read_multi_turns_angle(); //read angle and angle velocity
-    custom_wait();
+    custom_wait_loop();
     m2.receive_CAN_data();
-    custom_wait();
+    custom_wait_loop();
 
 //    if ((m1.motorAngle > 180) || (m2.motorAngle > 180))
 //    {
@@ -358,16 +366,16 @@ void CurrentControl()
 //    }
     
     // Read trigger signal
-    triggerVal = analogRead(triggerPin);
-    digitalWrite(A8, LOW); //pin converted into GND
-    if (triggerVal < 400)
-    {
-      triggerOn = 0;
-    }
-    else
-    {
-      triggerOn = 1;
-    }
+//    triggerVal = analogRead(triggerPin);
+//    digitalWrite(A8, LOW); //pin converted into GND
+//    if (triggerVal < 400)
+//    {
+//      triggerOn = 0;
+//    }
+//    else
+//    {
+//      triggerOn = 1;
+//    }
     //Serial.print(triggerVal); Serial.print(" ");
     //Serial.print(triggerOn);
 
@@ -385,6 +393,7 @@ void CurrentControl()
   {
     receive_ble_Data();
     send_ble_Data(); // send the BLE data
+    //print_data();
     previous_time_ble = current_time;
         
   }
@@ -463,7 +472,7 @@ void Compute_Cur_Commands()
     }
     
   }
-  
+
   else if (assist_mode == 4)
   {
   }
@@ -780,9 +789,9 @@ void initial_CAN()
   //delay(3000);
   //pinMode(28, OUTPUT);
   //digitalWrite(28, LOW);
-  delay(500);
+  delay(100);
   Serial.println("Can bus setup done...");
-  delay(500);
+  delay(100);
 }
 
 //void receive_CAN_data()
@@ -993,21 +1002,16 @@ void logData3()
 
 //**************Wait functions*****************//
 
-void custom_wait()
+void custom_wait_loop()
 {
-//  delay(1);
   for (int  qwe = 0; qwe < 1e3; qwe++)
     {
       //for (int aaa = 0; aaa < 1e1; aaa++){}
     }
 }
-void custom_wait2()
+void custom_wait_delay()
 {
   delay(1);
-//  for (int  qwe = 0; qwe < 1e8; qwe++)
-//    {
-//      for (int aaa = 0; aaa < 1e8; aaa++){}
-//    }
 }
 
 //**************Plot Data*****************//

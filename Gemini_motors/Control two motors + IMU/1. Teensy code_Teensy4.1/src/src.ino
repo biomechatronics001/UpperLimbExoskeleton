@@ -76,8 +76,8 @@ void CurrentControl()
   //********* use to control the teensy controller frequency **********//
   if (current_time - previous_time > Tinterval_microsecond) // check if the time period of control loop is already larger than Sample period of control loop (Tinterval_microsecond)
   {
-    Cur_command_1 = +0.5;//1.5 * sin(2 * PI * current_time / 1000000) / torque_constant;
-    Cur_command_2 = -0.5;//-1.5 * sin(2 * PI * current_time / 1000000) / torque_constant;
+    Cur_command_1 = 1;//0.5 + 0.5 * sin(2 * PI * current_time / 1000000) / torque_constant;
+    Cur_command_2 = -1;//-0.5 - 0.5 * sin(2 * PI * current_time / 1000000) / torque_constant;
 
     //Serial.print(m1.iq_A); Serial.print("  ");
     //Serial.print(m2.iq_A); Serial.print("  ");
