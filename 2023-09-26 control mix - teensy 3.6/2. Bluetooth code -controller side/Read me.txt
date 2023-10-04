@@ -1,0 +1,3 @@
+Please download this code to nRF52840 (UART-Bluetooth convertor) which is connect to your exoskeleton main controler with UART pins (3.3 V, GND, RX, TX).
+
+nRF52840 ordering link: https://www.adafruit.com/product/4062

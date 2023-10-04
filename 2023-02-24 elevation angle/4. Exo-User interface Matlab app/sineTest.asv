@@ -1,0 +1,17 @@
+clear all
+close all
+clc
+
+%%
+phi = 100;
+duration = 50;
+magnitude = 1;
+
+timeList = 0:198;
+torqueTempList = zeros(size(timeList));
+torqueTempList(1+phi:1+phi+duration) = magnitude * sin(pi/duration*(timeList(1:1+duration)));
+offset = max([0,1+phi+duration-100]);
+torqueList = circshift(torqueTempList(1+offset:1+offset+100),offset);
+
+figure(1)
+plot(timeList(1:100), torqueList(1:100))
