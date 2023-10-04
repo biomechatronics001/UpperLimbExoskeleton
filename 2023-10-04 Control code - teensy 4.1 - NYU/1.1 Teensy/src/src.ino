@@ -61,12 +61,6 @@ uint32_t Motor_ID1 = 2; //1 Motor Can Bus ID, left, loadcell: port 1, positive c
 uint32_t Motor_ID2 = 1; //2 Motor Can Bus ID, right, loadcell: port 2, positive current = flexion // updated on 2022-04-01 3
 int CAN_ID = 3;         // CAN port from Teensy
 
-const double p1 = -1.027e-09;
-const double p2 =  2.757e-07;
-const double p3 = -3.17e-05;
-const double p4 =  0.004151;
-const double p5 = -0.04245;
-
 const double a1 = 508.5;
 const double b1 = 0.02148;
 const double c1 = -0.6065;
