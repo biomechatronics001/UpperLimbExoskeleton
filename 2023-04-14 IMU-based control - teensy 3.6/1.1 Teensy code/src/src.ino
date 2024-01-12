@@ -51,15 +51,15 @@ uint32_t ID_offset = 0x140;
 
 char user_sex = 'M'; // M for male, F for female
 float user_weight = 70; // [kg]
-float user_height = 1.75; // [m]
+float user_height = 1.76; // [m]
 
 int assist_mode = 3;
 
 double Gain_L = 1;
 double Gain_R = 1;
-double Gain_common = 0.3;
+double Gain_common = 0.5;
 
-int current_limitation = 5;  //(unit Amp)
+float current_limitation = 5.0;  //(unit Amp)
 
 ///////////////////////////////////////////////////////
 
@@ -581,6 +581,12 @@ void receive_ble_Data()
             else if (sex_value == 1){user_sex = 'F';}
             Serial.print("User sex: ");
             Serial.println(user_sex);
+          }
+          else if (data_rs232_rx[3] == 8)
+          {
+            current_limitation = ((int16_t)(((uint16_t)data_rs232_rx[4]) | ((uint16_t)data_rs232_rx[5] << 8))) / 10.0;
+            Serial.print("Current limitation [A]: ");
+            Serial.println(current_limitation);
           }
           else if (data_rs232_rx[3] == 10)
           {
