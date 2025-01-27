@@ -418,7 +418,7 @@ void print_Data()
 {
   Serial.print(imu.RTx); Serial.print(" ");
   Serial.print(imu.RTy); Serial.print(" ");
-  Serial.print(imu.RTz); Serial.print(" ");
+  Serial.print(imu.RTz); Serial.print(" "); Serial.print("- ");
   //elevationY = cos(imu.RTx*PI/180)*cos(imu.RTz*PI/180) - sin(imu.RTx*PI/180)*sin(imu.RTz*PI/180)*sin(imu.RTy*PI/180);
   //elevationY = acos(elevationY)*180/PI;
   //Serial.print(elevationY); Serial.print(" ");

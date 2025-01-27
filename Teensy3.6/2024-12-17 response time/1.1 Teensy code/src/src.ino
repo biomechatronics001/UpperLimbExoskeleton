@@ -127,7 +127,14 @@ float torque_bio_L = 0;
 float torque_bio_R = 0;
 float motor_torque_L = 0;
 float motor_torque_R = 0;
+float desired_elevation_R = 0;
 
+float kp = 20;
+float ki = 5;
+float kd = 0;
+float err, err_sum, err_prv, err_der;
+float PID_output;
+int PID_tolerance = 5;
 
 float radius_motor_pulley = 0.046; // [m]
 float radius_arm = 0.233; //[m]
@@ -316,6 +323,33 @@ void CurrentControl()
   //********* use to control the teensy controller frequency **********//
   if (current_time - previous_time > Tinterval_microsecond) // check if the time period of control loop is already larger than Sample period of control loop (Tinterval_microsecond)
   {
+    arm_elevation_R = cos(imu.RTx*PI/180)*cos(imu.RTy*PI/180);
+    arm_elevation_R = acos(arm_elevation_R)*180/PI;
+    
+    if (relTime < 5000) 
+      {
+        desired_elevation_R = 0;
+        Cur_command_R = 0;
+        print_Data();
+      }
+    else if (relTime > 15000 && relTime <= 20000 ) 
+      {
+        desired_elevation_R = 0;
+        Cur_command_R = 0;
+        print_Data();
+      }
+    else if (relTime > 20000) 
+      {
+        desired_elevation_R = 0;
+        Cur_command_R = 0;
+      }
+    else
+      {
+        desired_elevation_R = 90;
+        Cur_command_R = -current_limitation;
+        print_Data();
+      }
+        
     if (Stop_button) //stop
     {
       Cur_command_L = 0;
@@ -323,13 +357,15 @@ void CurrentControl()
     }
     else
     {
-      Compute_Cur_Commands(); // Vahid
+      //PID_control();     
+      //Cur_command_R = min(0,-PID_output);
+      //Compute_Cur_Commands();
     }
     Cur_limitation();
 
     //Compute_Torque_Commands();
 
-    print_Data();
+    //print_Data();
     //print_Current_Data();
     //print_Torque_Data();   
     //print_IMU_Data();
@@ -977,21 +1013,31 @@ void logData3()
   
 }
 
+void PID_control()
+{
+  err = desired_elevation_R - arm_elevation_R;
+  err_sum += (err * Tinterval_microsecond/1000);
+  err_der = (err - err_prv) * 1000/Tinterval_microsecond;
+  PID_output = kp * err + ki * err_sum + kd * err_der;
+}
+
 //**************Plot Data*****************//
 
 void print_Data()
 {
+  Serial.print(relTime); Serial.print("  ");
+  Serial.print(desired_elevation_R); Serial.print("  ");
   //Serial.print(current_time/1e6); Serial.print("   ");
   //Serial.print(arm_elevation_L); Serial.print("  ");
   Serial.print(arm_elevation_R); Serial.print("  ");
   //Serial.print(torque_bio_L); Serial.print("  ");
-  Serial.print(torque_bio_R); Serial.print("  ");
+  //Serial.print(torque_bio_R); Serial.print("  ");
   //Serial.print(ratio_L); Serial.print("  ");
   //Serial.print(ratio_R); Serial.print("  ");
   //Serial.print(Cur_command_L); Serial.print("  ");
   Serial.print(Cur_command_R); Serial.print("  ");
   //Serial.print(m1.motorAngle); Serial.print("  "); // angle unit: degree 
-  Serial.print(m2.motorAngle); Serial.print("  "); // angle unit: degree
+  //Serial.print(m2.motorAngle); Serial.print("  "); // angle unit: degree
 //  Serial.print(imu.LTx); Serial.print(" ");
 //  Serial.print(imu.RTx); Serial.print(" ");
 //  Serial.print(m1.speed_value); Serial.print("  "); // angle velocity unit: degree per second

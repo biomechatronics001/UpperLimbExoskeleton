@@ -6,7 +6,7 @@
 #include "WL_IMU.h"
 #include <Arduino.h>
 #include <stdio.h>
-//#include "ads1292r.h"
+#include "ads1292r.h"
 //#include "CIC.h"
 //#include <SD.h>
 
@@ -59,7 +59,7 @@ double Gain_L = 1;
 double Gain_R = 1;
 double Gain_common = 0.5;
 
-float current_limitation = 5.0;  //(unit Amp)
+float current_limitation = 8.0;  //(unit Amp)
 
 ///////////////////////////////////////////////////////
 
@@ -128,13 +128,14 @@ float torque_bio_R = 0;
 float motor_torque_L = 0;
 float motor_torque_R = 0;
 
+float loadcell_torque = 0.;
 
 float radius_motor_pulley = 0.046; // [m]
 float radius_arm = 0.233; //[m]
 
 Motor_Control_Pediatric_V2 m1(Motor_ID1, CAN_ID, Gear_ratio); //Create motor object see Motor_Control_Pediatric_V2.h
 Motor_Control_Pediatric_V2 m2(Motor_ID2, CAN_ID, Gear_ratio); //Create motor object see Motor_Control_Pediatric_V2.h
-// ads1292r torque_sensor1;                                   //Create torque sensor object see ads1292r.h
+ads1292r torque_sensor1;                                   //Create torque sensor object see ads1292r.h
 IMU imu;                                                      //Create IMU object see WL_IMU.h
 
 double Fsample = 500;        // [Hz] teensy controller sample rate (Maximum frequency: 1000 Hz due to Can Bus)
@@ -220,10 +221,9 @@ void setup()
   Serial4.begin(115200); //used to communication with bluetooth peripheral. Teensy->RS232->Adafruit Feather nRF52840 Express(peripheral)
   initial_CAN();
   
-  // torque_sensor1.Torque_sensor_initial();                                           //initial the torque sensor see ads1292r.cpp.
-  // torque_sensor1.Torque_sensor_gain(0.0003446 * (-1) * 2, 0.0003446 * (-1) * 2.35); //set the calibration gain for torque sensor. Torque= gain* ADCvalue+offset.see ads1292r.cpp.
-  // torque_sensor1.Torque_sensor_offset_calibration();                                //Auto offset the torque sensor to zero. see ads1292r.cpp.
-  
+  torque_sensor1.Torque_sensor_initial();                                           //initial the torque sensor see ads1292r.cpp.
+  torque_sensor1.Torque_sensor_gain(-0.00043,0.0020167); //set the calibration gain for torque sensor. Torque= gain* ADCvalue+offset.see ads1292r.cpp.
+  torque_sensor1.Torque_sensor_offset_calibration();                                //Auto offset the torque sensor to zero. see ads1292r.cpp.  
   delay(500);
 
   if (user_sex == 'M')
@@ -310,7 +310,7 @@ void CurrentControl()
 {
   ////******IMU+Current Control Example Torque Constant 0.6 Nm/A**********////////
   imu.READ();                          //Check if IMU data available and read it. the sample rate is 100 hz
-  // torque_sensor1.Torque_sensor_read(); //Check if torque sensor1 is available // Vahid
+  torque_sensor1.Torque_sensor_read(); //Check if torque sensor1 is available // Vahid
   current_time = micros();             //query current time (microsencond)
 
   //********* use to control the teensy controller frequency **********//
@@ -328,6 +328,8 @@ void CurrentControl()
     Cur_limitation();
 
     //Compute_Torque_Commands();
+
+    loadcell_torque = torque_sensor1.torque[0];
 
     print_Data();
     //print_Current_Data();
@@ -962,6 +964,7 @@ void logData3()
      rb.print(m2.motorAngle); rb.write(" ");
      //rb.print(m1.speed_value); rb.write(" ");
      rb.print(m2.speed_value); rb.write(" "); 
+     rb.print(loadcell_torque); rb.write(" "); 
      rb.println();
      //rb.print(triggerOn); //rb.write(" ");
      //rb.print(triggerVal); //rb.write(" ");
@@ -981,6 +984,7 @@ void logData3()
 
 void print_Data()
 {
+  Serial.print(relTime); Serial.print("  ");
   //Serial.print(current_time/1e6); Serial.print("   ");
   //Serial.print(arm_elevation_L); Serial.print("  ");
   Serial.print(arm_elevation_R); Serial.print("  ");
@@ -992,6 +996,7 @@ void print_Data()
   Serial.print(Cur_command_R); Serial.print("  ");
   //Serial.print(m1.motorAngle); Serial.print("  "); // angle unit: degree 
   Serial.print(m2.motorAngle); Serial.print("  "); // angle unit: degree
+  Serial.print(loadcell_torque); Serial.print("  ");
 //  Serial.print(imu.LTx); Serial.print(" ");
 //  Serial.print(imu.RTx); Serial.print(" ");
 //  Serial.print(m1.speed_value); Serial.print("  "); // angle velocity unit: degree per second
