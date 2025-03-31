@@ -1,4 +1,4 @@
-#include "Sig_Motor_Control.h" 
+#include "omni_motor_Control.h" 
 //FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_16> Can3;
 
 Motor_Control_Tmotor::Motor_Control_Tmotor(uint8_t id, int Can_id)
@@ -207,7 +207,7 @@ void Motor_Control_Tmotor::reboot()
     send_CAN_message();    
 }  
 
-void Motor_Control_Tmotor::sig_motor_reset() {
+void Motor_Control_Tmotor::omni_motor_reset() {
   msgW.id = (ID<<5) + 0x007;  
   msgW.len = 8;  
   msgW.flags.extended = 0;
@@ -243,7 +243,7 @@ void Motor_Control_Tmotor::sig_encoder_reset() {
   send_CAN_message();  
 }
 
-void Motor_Control_Tmotor::sig_motor_start() {
+void Motor_Control_Tmotor::omni_motor_start() {
   msgW.id = (ID<<5) + 0x007;   
   msgW.len = 8;  
   msgW.flags.extended = 0;
@@ -261,7 +261,7 @@ void Motor_Control_Tmotor::sig_motor_start() {
   send_CAN_message();  
 }   
 
-void Motor_Control_Tmotor::sig_motor_end() {
+void Motor_Control_Tmotor::omni_motor_end() {
   msgW.id = (ID<<5) + 0x007;  
   msgW.len = 8;   
   msgW.flags.extended = 0;   
@@ -279,7 +279,7 @@ void Motor_Control_Tmotor::sig_motor_end() {
   send_CAN_message();    
 }   
 
-void Motor_Control_Tmotor::sig_mit_ctl_mode_start() {
+void Motor_Control_Tmotor::omni_mit_ctl_mode_start() {
   msgW.id = (ID<<5) + 0x00B;    
   msgW.len = 8;   
   msgW.flags.extended = 0;   
@@ -336,7 +336,7 @@ void Motor_Control_Tmotor::sig_torque_ctl_mode_start() {
   send_CAN_message();   
 }   
 
-void Motor_Control_Tmotor::sig_mit_ctl_cmd(float p_des, float v_des, float kp, float kd, float t_ff)
+void Motor_Control_Tmotor::omni_mit_ctl_cmd(float p_des, float v_des, float kp, float kd, float t_ff)
 {
   //limit of desired position, desired velocity, kp, kd, & desired torque
   p_des = fminf(fmaxf(P_MIN, p_des), P_MAX);  

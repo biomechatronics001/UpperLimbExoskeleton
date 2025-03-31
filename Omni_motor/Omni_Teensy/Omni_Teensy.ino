@@ -9,9 +9,8 @@
 
 /*MOTOR*/ 
 #include <FlexCAN_T4.h>   
-#include "Sig_Motor_Control.h"
+#include "Omni_motor_Control.h"   
 
-#include "WL_IMU.h"
 // #include "ads1292r.h"   
 
 FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_16> Can3;   
@@ -25,31 +24,8 @@ float f_RTAVx = 0;
 CAN_message_t msgR;   
 int CAN_ID = 3;  
 
-///////////////////////////////////////////////////////
-
-char user_sex = 'M'; // M for male, F for female
-float user_weight = 70; // [kg]
-float user_height = 1.75; // [m]
-
-int assist_mode = 1;//3;
-String mode = "start";
-
-double Gain_L = 1;
-double Gain_R = 1;
-double Gain_common = 1;
-
-int current_limitation = 5;  //(unit Amp)
-int max_allowed_torque = 30; // Safety measurement to limit the commanded torque
-
-int Stop_button = 0;    // Stop function
-
-double Left_Torque_Command;
-double Right_Torque_Command;
-
-///////////////////////////////////////////////////////
-
-int Sig_Motor_ID_1 = 1;     
-int Sig_Motor_ID_2 = 0;       
+int omni_motor_ID_1 = 1;     
+int omni_motor_ID_2 = 0;       
 
 double torque_command = 0;  
 double velocity_command = 0;  
@@ -77,11 +53,9 @@ float t_ff = 0;
 float initial_pos_1 = 0;       
 float initial_pos_2 = 0;       
 
-Motor_Control_Tmotor sig_m1(0x000, CAN_ID);   
-Motor_Control_Tmotor sig_m2(0x001, CAN_ID);   
+Motor_Control_Tmotor omni_m1(0x000, CAN_ID);   
+Motor_Control_Tmotor omni_m2(0x001, CAN_ID);   
 /*MOTOR*/  
-
-IMU imu;                                                      //Create IMU object see WL_IMU.h
 
 /*Serial Class Setup*/  
 Serial_Com Serial_Com;   
@@ -196,9 +170,9 @@ float tau_ff_1 = 0.0;
 float tau_ff_2 = 0.0;   
 
 //*** Motor Mode Set ***//   
-//int ctl_method = 1;    // 0 for using custom controller, 1 for using other normal controller  
+int ctl_method = 1;    // 0 for using custom controller, 1 for using other normal controller  
 int ctl_mode = 0;      // 0 for torque control, 1 for mit control    
-//int ctl_type = 0;      // 0 for motion, 1 for force tracking, 2 for direct torque   
+int ctl_type = 0;      // 0 for motion, 1 for force tracking, 2 for direct torque   
   
 int l_ctl_dir = 1;      
 int r_ctl_dir = -1;    
@@ -219,63 +193,6 @@ double Assist_delay_gain = 0;
 double S_torque_command_left = 0.0;    
 double S_torque_command_right = 0.0;   
 
-////////////////////////////////////////
-const double p1 = -1.027e-09;
-const double p2 =  2.757e-07;
-const double p3 = -3.17e-05;
-const double p4 =  0.004151;
-const double p5 = -0.04245;
-
-const double a1 = 508.5;
-const double b1 = 0.02148;
-const double c1 = -0.6065;
-const double a2 = 455;
-const double b2 = 0.02248;
-const double c2 = 2.479;
-
-float ua_wc = 0;
-float ua_hc = 0;
-float ua_COMc = 0;
-
-float fa_wc = 0;
-float fa_hc = 0;
-float fa_COMc = 0;
-
-float h_wc = 0;
-float h_hc = 0;
-float h_COMc = 0;
-
-float ua_weight = 0;
-float ua_length = 0;
-float ua_moment_arm = 0;
-
-float fa_weight = 0;
-float fa_length = 0;
-float fa_moment_arm = 0;
-
-float h_weight = 0;
-float h_length = 0;
-float h_moment_arm = 0;
-
-float coeff_weight = 0;
-float coeff_height = 0;
-float coeff_COM = 0;
-
-float angle_threshold = 20;
-float ratio_L = 0;
-float ratio_R = 0;
-float arm_elevation_L;
-float arm_elevation_R;
-float moment_arm_L = 0;
-float moment_arm_R = 0;
-float torque_bio_L = 0;
-float torque_bio_R = 0;
-float motor_torque_L = 0;
-float motor_torque_R = 0;
-
-float radius_motor_pulley = 0.046; // [m]
-////////////////////////////////////////
-
 //// setup can and motors ////
 void setup() {
   delay(3000);   
@@ -287,65 +204,72 @@ void setup() {
   
   Serial_Com.INIT();    
 
-  if (user_sex == 'M')
-  {
-    ua_wc = 3.25/100;
-    ua_hc = 17.2/100;
-    ua_COMc = 43.6/100;
-    
-    fa_wc = 1.87/100;
-    fa_hc = 15.7/100;
-    fa_COMc = 43.0/100;
-    
-    h_wc = 0.65/100;
-    h_hc = 5.75/100;
-    h_COMc = 46.8/100;
-  }
-  else if (user_sex == 'F')
-  {
-    ua_wc = 2.9/100;
-    ua_hc = 17.3/100;
-    ua_COMc = 45.8/100;
-    
-    fa_wc = 1.57/100;
-    fa_hc = 16.0/100;
-    fa_COMc = 43.4/100;
-    
-    h_wc = 0.5/100;
-    h_hc = 5.75/100;
-    h_COMc = 46.8/100;
-  }
-
-  ua_weight = user_weight*ua_wc;
-  ua_length = user_height*ua_hc;
-  ua_moment_arm = ua_length*ua_COMc;
-
-  fa_weight = user_weight*fa_wc;
-  fa_length = user_height*fa_hc;
-  fa_moment_arm = ua_length + fa_length*fa_COMc;
-  
-  h_weight = user_weight*h_wc;
-  h_length = user_height*h_hc;
-  h_moment_arm = ua_length + fa_length + h_length*h_COMc;
-  
-  imu.Gain_E = 1;         //Extension gain for delay output feedback control
-  imu.Gain_F = 1;         //Flexion gain for delay output feedback control  DOFC.Gain_E = 10;            //Extension gain for delay output feedback control
-  imu.STS_Gain = 0;
-  imu.delaypoint = 0;     //realative to delay time (delaypoint*sampletime=delaytime) for delay output feedback control
-  imu.alpha = 5;
-  imu.beta = 2;
-  imu.angleRelativeThreshold = 20;
-
   initial_CAN();    
-  initial_Sig_motor();    
-  delay(100);
-
-  t_0 = micros();
+  initial_omni_motor();    
+  delay(100);  
+  t_0 = micros();    
 }  
 
+//// initial motor //// 
+void initial_omni_motor() {  
+  omni_m1.error_clear();    
+  delay(200); 
+
+  /////////// set control mode /////////  
+  if (ctl_mode == 1)  
+  {
+    omni_m1.omni_mit_ctl_mode_start();      
+    omni_m2.omni_mit_ctl_mode_start();     
+  } 
+  else
+  {
+    omni_m1.sig_torque_ctl_mode_start();    
+    delay(200);   
+    omni_m2.sig_torque_ctl_mode_start();        
+  } 
+  delay(200);  
+  
+  omni_m1.omni_motor_start();    
+  omni_m1.request_pos_vel();    
+  delay(500);   
+
+  omni_m2.omni_motor_start();    
+  omni_m2.request_pos_vel();     
+  delay(500);    
+
+  if (ctl_mode == 1)  
+  {
+    omni_m1.omni_mit_ctl_cmd(0.0, 0.0, 0.0, 0.0, 0.01);     
+    omni_m2.omni_mit_ctl_cmd(0.0, 0.0, 0.0, 0.0, 0.01);          
+    receive_mit_ctl_feedback();     
+  }
+  else{
+    // omni_m1.request_torque();   
+    omni_m1.sig_torque_cmd(0.01);    
+    delay(200);    
+    // omni_m2.request_torque();   
+    omni_m2.sig_torque_cmd(0.01);      
+    delay(200);   
+  } 
+
+  for (int i =0; i < 1000; i++)
+  {
+    receive_torque_ctl_feedback();     
+  }
+  delay(1000);   
+
+  initial_pos_1 = omni_m1.pos;     
+  initial_pos_2 = omni_m2.pos;     
+
+  delay(500);  
+
+  /////// command initial setting ///////
+  M1_torque_command = 0.0;         
+  M2_torque_command = 0.0;         
+}
+
 void loop() {
-    Serial_Com.READ2();  
-    imu.READ();     
+    Serial_Com.READ2();       
 
     current_time = micros() - t_0;            
     t = current_time/1000000.0;          
@@ -372,32 +296,26 @@ void loop() {
       doi++;
       doi = doi % 100;
 
+      int max_allowed_torque = 30; // Safety measurement to limit the commanded torque
+
       //sample sine wave command
-      //M1_torque_command = 0.2;//*sin(2*t*PI);
-      //M2_torque_command = 0.5*sin(2*t*PI);
-      if (Stop_button) //stop
-        {
-          M1_torque_command = 0;//+0.5;
-          M2_torque_command = 0;//-0.5;
-        }
-      else
-        {
-          Compute_Torque_Commands(); // Vahid
-        }
+      M1_torque_command = 0.5*sin(2*t*PI);
+      M2_torque_command = 0.5*sin(2*t*PI);
       
       // clip the torque command  
       M1_torque_command = clip_torque(M1_torque_command);         
       M2_torque_command = clip_torque(M2_torque_command);           
     
-      M1_torque_command = M1_torque_command * l_ctl_dir;   
+      
       M2_torque_command = M2_torque_command * r_ctl_dir;        /// for right.   
+      M1_torque_command = M1_torque_command * l_ctl_dir;   
       
       print_data_motor();
       if (ctl_mode == 1)    
       {
         // mit control    
-        sig_m1.sig_mit_ctl_cmd(0.0, 0.0, 10.0, 0.01, M1_torque_command);      
-        sig_m2.sig_mit_ctl_cmd(0.0, 0.0, 10.0, 0.01, M2_torque_command);       
+        omni_m1.omni_mit_ctl_cmd(0.0, 0.0, 10.0, 0.01, M1_torque_command);      
+        omni_m2.omni_mit_ctl_cmd(0.0, 0.0, 10.0, 0.01, M2_torque_command);       
         receive_mit_ctl_feedback();      
       } 
 
@@ -411,157 +329,13 @@ void loop() {
           receive_torque_ctl_feedback();     
         }      
 
-        sig_m1.sig_torque_cmd(M1_torque_command);      
-        sig_m2.sig_torque_cmd(M2_torque_command);        
+        omni_m1.sig_torque_cmd(M1_torque_command);      
+        omni_m2.sig_torque_cmd(M2_torque_command);        
       }
       //Wait(2200);
       previous_time = current_time;   
     }  
 }  
-
-void Compute_Torque_Commands()
-{
-  if (assist_mode == 1)
-  {
-    mode = "Constant Signal";
-    M1_torque_command = l_ctl_dir * Gain_L * Gain_common * 0.3;
-    M2_torque_command = r_ctl_dir * Gain_R * Gain_common * 0.3;
-  }
-  else if (assist_mode == 2)
-  {
-    mode = "Sine Wave";
-    M1_torque_command =  Gain_L * sin(2 * PI * t) * 0.3;  // [Amp]
-    M2_torque_command =  Gain_R * sin(2 * PI * t) * 0.3;  // [Amp]
-  }
-  else if (assist_mode == 3)
-  {
-    mode = "Gravity Compensation";
-    //arm_abduction_L = -imu.LTx;
-    //arm_flexion_L = -imu.LTz;
-    //arm_abduction_R = -imu.RTx;
-    //arm_flexion_R = imu.RTz;
-
-    arm_elevation_L = cos(imu.LTx*PI/180)*cos(imu.LTy*PI/180);
-    arm_elevation_L = acos(arm_elevation_L)*180/PI;
-    arm_elevation_R = cos(imu.RTx*PI/180)*cos(imu.RTy*PI/180);
-    arm_elevation_R = acos(arm_elevation_R)*180/PI;
-    //int_rotation_R = imu.RTy;
-    //abduction_R = -imu.RTx;
-    //flexion_R = imu.RTz;
-
-    if (arm_elevation_L > angle_threshold)
-    {
-      torque_bio_L = Compute_Biological_Torque(arm_elevation_L);
-      moment_arm_L = Compute_moment_arm(arm_elevation_L)/1000;
-      motor_torque_L = torque_bio_L*radius_motor_pulley/moment_arm_L;
-      M1_torque_command = l_ctl_dir * Gain_L*Gain_common*motor_torque_L;
-    }
-    else
-    {
-      M1_torque_command = 0;
-    }
-    
-    if (arm_elevation_R > angle_threshold)
-    {
-      torque_bio_R = Compute_Biological_Torque(arm_elevation_R);
-      moment_arm_R = Compute_moment_arm(arm_elevation_R)/1000;
-      motor_torque_R = torque_bio_R*radius_motor_pulley/moment_arm_R;
-      M2_torque_command = r_ctl_dir * Gain_R*Gain_common*motor_torque_R;
-    }
-    else
-    {
-      M2_torque_command = 0;
-    }
-    
-  }
-  else if (assist_mode == 4)
-  {
-  }
-  else if (assist_mode == 5) //Serial communication with High level system
-  {
-    mode = "High Level Control";
-    //send_serial_Data_Highlevel(); 
-    //receive_serial_Data_Highlevel();
-    M1_torque_command = l_ctl_dir * Left_Torque_Command; //2.2;
-    M2_torque_command = r_ctl_dir * Right_Torque_Command; //2.2;
-  }
-  else if (assist_mode == 100)
-  {
-    mode = "Zero Current";
-    M1_torque_command = 0;
-    M2_torque_command = 0;
-  }
-}
-
-float Compute_Biological_Torque(float elevation_angle)
-{
-  float torque = (ua_weight*ua_moment_arm + fa_weight*fa_moment_arm + h_weight*h_moment_arm)*9.81*sin(elevation_angle*PI/180);
-  return torque;
-}
-
-float Compute_moment_arm(float elevation_angle)
-{ 
-  float moment_arm = a1*sin(b1*elevation_angle + c1) + a2*sin(b2*elevation_angle + c2);
-  return moment_arm;
-}
-
-//// initial sig motor //// 
-void initial_Sig_motor() {  
-  sig_m1.error_clear();    
-  delay(200); 
-
-  /////////// set control mode /////////  
-  if (ctl_mode == 1)  
-  {
-    sig_m1.sig_mit_ctl_mode_start();      
-    sig_m2.sig_mit_ctl_mode_start();     
-  } 
-  else
-  {
-    sig_m1.sig_torque_ctl_mode_start();    
-    delay(200);   
-    sig_m2.sig_torque_ctl_mode_start();        
-  } 
-  delay(200);  
-  
-  sig_m1.sig_motor_start();    
-  sig_m1.request_pos_vel();    
-  delay(500);   
-
-  sig_m2.sig_motor_start();    
-  sig_m2.request_pos_vel();     
-  delay(500);    
-
-  if (ctl_mode == 1)  
-  {
-    sig_m1.sig_mit_ctl_cmd(0.0, 0.0, 0.0, 0.0, 0.01);     
-    sig_m2.sig_mit_ctl_cmd(0.0, 0.0, 0.0, 0.0, 0.01);          
-    receive_mit_ctl_feedback();     
-  }
-  else{
-    // sig_m1.request_torque();   
-    sig_m1.sig_torque_cmd(0.01);    
-    delay(200);    
-    // sig_m2.request_torque();   
-    sig_m2.sig_torque_cmd(0.01);      
-    delay(200);   
-  } 
-
-  for (int i =0; i < 1000; i++)
-  {
-    receive_torque_ctl_feedback();     
-  }
-  delay(1000);   
-
-  initial_pos_1 = sig_m1.pos;     
-  initial_pos_2 = sig_m2.pos;     
-
-  delay(500);  
-
-  /////// command initial setting ///////
-  M1_torque_command = 0.0;         
-  M2_torque_command = 0.0;         
-}
 
 double clip_torque(double torque_command)
 {
@@ -589,7 +363,7 @@ float Sig_torque_control(float force_des, float dt_force_des, float force_t, flo
   return tor_cmd;   
 }  
 
-float Sig_motion_control(float pos_des, float vel_des, float pos_t, float vel_t, float kp, float kd, float tau_ff)  
+float omni_motion_control(float pos_des, float vel_des, float pos_t, float vel_t, float kp, float kd, float tau_ff)  
 {
   float pos_ctl_cmd = 0;   
 
@@ -607,7 +381,7 @@ void receive_mit_ctl_feedback() {
     {
       if (msgR.buf[0] == 0x000)      
       {
-        sig_m1.unpack_reply(msgR, initial_pos_1);      
+        omni_m1.unpack_reply(msgR, initial_pos_1);      
       } 
     } 
   }
@@ -620,24 +394,24 @@ void receive_torque_ctl_feedback() {
 
     if (msgR.id == 0x009)  
     {
-      sig_m1.unpack_pos_vel(msgR, initial_pos_1);       
+      omni_m1.unpack_pos_vel(msgR, initial_pos_1);       
     } 
 
     if (msgR.id == 0x01C) 
     {
-      sig_m1.unpack_torque(msgR);    
-      tau_t_1 = sig_m1.torque;          
+      omni_m1.unpack_torque(msgR);    
+      tau_t_1 = omni_m1.torque;          
     }  
 
     if (msgR.id == 0x029)  
     {
-      sig_m2.unpack_pos_vel(msgR, initial_pos_2);       
+      omni_m2.unpack_pos_vel(msgR, initial_pos_2);       
     } 
 
     if (msgR.id == 0x03C)   
     {
-      sig_m2.unpack_torque(msgR);         
-      tau_t_2 = sig_m2.torque;           
+      omni_m2.unpack_torque(msgR);         
+      tau_t_2 = omni_m2.torque;           
     }  
   }
 }   
@@ -679,8 +453,8 @@ void Receive_ble_Data(){
 
 void Transmit_ble_Data() {
   t_teensy        = t * 100;
-  L_motor_torque  = sig_m1.torque * 100;
-  R_motor_torque  = sig_m2.torque * 100;
+  L_motor_torque  = omni_m1.torque * 100;
+  R_motor_torque  = omni_m2.torque * 100;
   L_motor_torque_command = M1_torque_command *100;
   R_motor_torque_command = M2_torque_command *100;
 
@@ -744,17 +518,15 @@ void print_data_motor() {
   Serial.print(current_time);
   Serial.print(" ; ");
   Serial.print(" M1_tor ; "); //M1 is left, M2 is right
-  Serial.print(sig_m1.torque);    
+  Serial.print(omni_m1.torque);    
   Serial.print(" ; M1_cmd ; ");   
   Serial.print(M1_torque_command);   
   Serial.print(" ; M2_tor ; ");  
-  Serial.print(sig_m2.torque);  
+  Serial.print(omni_m2.torque);  
   Serial.print(" ; M2_cmd ; ");   
   Serial.print(M2_torque_command);
   Serial.print(" ; M1_pos ; ");
-  Serial.print(sig_m1.pos);
-   Serial.print(" ; M2_pos ; ");
-  Serial.print(sig_m2.pos);
+  Serial.print(omni_m1.pos);
   Serial.println(" ;  ");
 }  
 
@@ -765,15 +537,15 @@ void M1_Torque_Impedance_Control_Example(){
     kd = 0.0;        //dont change this  
 
     t_ff = M1_torque_command;   
-    tau_imp = (p_des - sig_m1.pos) * kp + (v_des - sig_m1.spe) * kd + t_ff;    
+    tau_imp = (p_des - omni_m1.pos) * kp + (v_des - omni_m1.spe) * kd + t_ff;    
 
     tau_imp = t_ff; 
-    sig_m1.sig_mit_ctl_cmd(p_des, v_des, kp, kd, tau_imp);   
+    omni_m1.omni_mit_ctl_cmd(p_des, v_des, kp, kd, tau_imp);   
 
     receive_mit_ctl_feedback();  
 } 
 
-void Sig_M_Torque_Impedance_Control_Example(){ 
+void omni_m_Torque_Impedance_Control_Example(){ 
     p_des = 0.0;  //dont change this    
     v_des = 0.0;  //dont change this    
     kp = 0.0;     //dont change this    
@@ -782,7 +554,7 @@ void Sig_M_Torque_Impedance_Control_Example(){
     t_ff = M1_torque_command;   
 
     tau_imp = t_ff;   
-    sig_m1.sig_mit_ctl_cmd(p_des, v_des, kp, kd, tau_imp);    
+    omni_m1.omni_mit_ctl_cmd(p_des, v_des, kp, kd, tau_imp);    
 
     receive_mit_ctl_feedback();    
 } 
@@ -795,7 +567,7 @@ void M2_Torque_Impedance_Control_Example(){
  
     t_ff = 0.3;     
     tau_imp = t_ff;    
-    sig_m2.sig_mit_ctl_cmd(p_des, v_des, kp, kd, tau_imp);    
+    omni_m2.omni_mit_ctl_cmd(p_des, v_des, kp, kd, tau_imp);    
 
     receive_mit_ctl_feedback();    
 }  
@@ -807,7 +579,7 @@ void M1_Position_Control_Example() {
   kp = 30;    //max 450 min 0
   kd = 1.5;   //max 5 min 0
   t_ff = 0;   //dont change this
-  sig_m1.sig_mit_ctl_cmd(p_des, v_des, kp, kd, t_ff);
+  omni_m1.omni_mit_ctl_cmd(p_des, v_des, kp, kd, t_ff);
   receive_mit_ctl_feedback();
 }
 
@@ -818,6 +590,6 @@ void M2_Position_Control_Example() {
   kp = 30;    //max 450 min 0
   kd = 1.5;   //max 5 min 0
   t_ff = 0;   //dont change this
-  sig_m2.sig_mit_ctl_cmd(p_des, v_des, kp, kd, t_ff);
+  omni_m2.omni_mit_ctl_cmd(p_des, v_des, kp, kd, t_ff);
   receive_mit_ctl_feedback();
 }  

@@ -37,18 +37,18 @@ class Motor_Control_Tmotor
     
     void set_origin();   
 
-    void sig_motor_reset();    
+    void omni_motor_reset();    
     void sig_encoder_reset();    
 
-    void sig_motor_start();    
-    void sig_motor_end();    
+    void omni_motor_start();    
+    void omni_motor_end();    
 
     void sig_speed_cmd();    
     void sig_torque_cmd(float tau);     
-    void sig_mit_ctl_cmd(float p_des, float v_des, float kp, float kd, float t_ff);    
+    void omni_mit_ctl_cmd(float p_des, float v_des, float kp, float kd, float t_ff);    
 
     void sig_torque_ctl_mode_start();    
-    void sig_mit_ctl_mode_start();    
+    void omni_mit_ctl_mode_start();    
     void sig_speed_ctl_mode_start();    
 
     int float_to_uint(float x, float x_min, float x_max, uint8_t nbits);  

@@ -10,7 +10,7 @@
 
 /*Libraries for motor control*/ 
 #include <FlexCAN_T4.h>   
-#include "Sig_Motor_Control.h"
+#include "Omni_Motor_Control.h"
 
 /*Library for IMU*/ 
 #include "WL_IMU.h"
@@ -49,8 +49,8 @@ double Gain_common = 1;
 
 String mode = "start";
 
-int Sig_Motor_ID_1 = 0; 
-int Sig_Motor_ID_2 = 1;    
+int omni_motor_ID_1 = 0; 
+int omni_motor_ID_2 = 1;    
 
 double M1_torque_command = 0;  
 double M2_torque_command = 0;    
@@ -103,9 +103,9 @@ float coeff_COM = 0;
 
 ///////////////////////////////////////////////////////
 
-/*Create motor objects (see Sig_Motor_Control.h)*/
-Motor_Control_Tmotor sig_m1(Sig_Motor_ID_1, CAN_ID);
-Motor_Control_Tmotor sig_m2(Sig_Motor_ID_2, CAN_ID);
+/*Create motor objects (see omni_motor_Control.h)*/
+Motor_Control_Tmotor omni_m1(omni_motor_ID_1, CAN_ID);
+Motor_Control_Tmotor omni_m2(omni_motor_ID_2, CAN_ID);
 
 /*Create IMU object (see WL_IMU.h)*/
 IMU imu;     
@@ -223,7 +223,7 @@ void setup() {
   
   /*Initialize motors and CAN communication*/
   initial_CAN();    
-  initial_Sig_motor();    
+  initial_omni_motor();    
   
   delay(100);
   t_0 = micros();
@@ -270,8 +270,8 @@ void loop() {
       } 
 
       //send torque commands to the motors
-      sig_m1.sig_torque_cmd(M1_torque_command);      
-      sig_m2.sig_torque_cmd(M2_torque_command);  
+      omni_m1.sig_torque_cmd(M1_torque_command);      
+      omni_m2.sig_torque_cmd(M2_torque_command);  
 
       print_data_motor();      
       
@@ -364,32 +364,32 @@ float Compute_moment_arm(float elevation_angle)
   return moment_arm;
 }
 
-//// initialize sig motor //// 
-void initial_Sig_motor() 
+//// initialize motor //// 
+void initial_omni_motor() 
 {  
-  sig_m1.error_clear();    
+  omni_m1.error_clear();    
   delay(200); 
-  sig_m2.error_clear();    
+  omni_m2.error_clear();    
   delay(200);  
 
-  sig_m1.sig_torque_ctl_mode_start();    
+  omni_m1.sig_torque_ctl_mode_start();    
   delay(200);   
-  sig_m2.sig_torque_ctl_mode_start();        
+  omni_m2.sig_torque_ctl_mode_start();        
   delay(200);  
   
-  sig_m1.sig_motor_start();    
-  sig_m1.request_pos_vel();    
+  omni_m1.omni_motor_start();    
+  omni_m1.request_pos_vel();    
   delay(500);   
 
-  sig_m2.sig_motor_start();    
-  sig_m2.request_pos_vel();     
+  omni_m2.omni_motor_start();    
+  omni_m2.request_pos_vel();     
   delay(500);    
 
-  // sig_m1.request_torque();   
-  sig_m1.sig_torque_cmd(0.01);    
+  // omni_m1.request_torque();   
+  omni_m1.sig_torque_cmd(0.01);    
   delay(200);    
-  // sig_m2.request_torque();   
-  sig_m2.sig_torque_cmd(0.01);      
+  // omni_m2.request_torque();   
+  omni_m2.sig_torque_cmd(0.01);      
   delay(200);   
   
   for (int i=0; i < 1000; i++)
@@ -398,8 +398,8 @@ void initial_Sig_motor()
   }
   delay(1000);   
 
-  initial_pos_1 = sig_m1.pos;     
-  initial_pos_2 = sig_m2.pos;     
+  initial_pos_1 = omni_m1.pos;     
+  initial_pos_2 = omni_m2.pos;     
 
   delay(500);  
 
@@ -432,24 +432,24 @@ void receive_torque_ctl_feedback()
 
     if (msgR.id == 0x009)  
     {
-      sig_m1.unpack_pos_vel(msgR, initial_pos_1);       
+      omni_m1.unpack_pos_vel(msgR, initial_pos_1);       
     } 
 
     if (msgR.id == 0x01C) 
     {
-      sig_m1.unpack_torque(msgR);    
-      tau_t_1 = sig_m1.torque;          
+      omni_m1.unpack_torque(msgR);    
+      tau_t_1 = omni_m1.torque;          
     }  
 
     if (msgR.id == 0x029)  
     {
-      sig_m2.unpack_pos_vel(msgR, initial_pos_2);       
+      omni_m2.unpack_pos_vel(msgR, initial_pos_2);       
     } 
 
     if (msgR.id == 0x03C)   
     {
-      sig_m2.unpack_torque(msgR);         
-      tau_t_2 = sig_m2.torque;           
+      omni_m2.unpack_torque(msgR);         
+      tau_t_2 = omni_m2.torque;           
     }  
   }
 }   
@@ -491,8 +491,8 @@ void Receive_ble_Data(){
 
 void Transmit_ble_Data() {
   t_teensy        = t * 100;
-  L_motor_torque  = sig_m1.torque * 100;
-  R_motor_torque  = sig_m2.torque * 100;
+  L_motor_torque  = omni_m1.torque * 100;
+  R_motor_torque  = omni_m2.torque * 100;
   L_motor_torque_command = M1_torque_command *100;
   R_motor_torque_command = M2_torque_command *100;
 
@@ -539,12 +539,12 @@ void Transmit_ble_Data() {
 void print_data_motor() {
   //M1 is left, M2 is right
   Serial.print(current_time);
-  Serial.print(" ; M1_tor : "); Serial.print(sig_m1.torque);    
+  Serial.print(" ; M1_tor : "); Serial.print(omni_m1.torque);    
   Serial.print(" ; M1_cmd : "); Serial.print(M1_torque_command);   
-  Serial.print(" ; M2_tor : "); Serial.print(sig_m2.torque);  
+  Serial.print(" ; M2_tor : "); Serial.print(omni_m2.torque);  
   Serial.print(" ; M2_cmd : "); Serial.print(M2_torque_command);
-  Serial.print(" ; M1_pos : "); Serial.print(sig_m1.pos);
-  Serial.print(" ; M2_pos : "); Serial.print(sig_m2.pos);
+  Serial.print(" ; M1_pos : "); Serial.print(omni_m1.pos);
+  Serial.print(" ; M2_pos : "); Serial.print(omni_m2.pos);
   Serial.println(" ;  ");
 }  
 
