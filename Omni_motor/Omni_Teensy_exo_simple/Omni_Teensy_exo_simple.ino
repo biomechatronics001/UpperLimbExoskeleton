@@ -37,10 +37,6 @@ int CAN_ID = 3;
 int assist_mode = 2;    // see function Compute_Torque_Commands(): 1 constant signal, 2 sine wave, 3 gravity compensation
 int Stop_button = 0;    // Stop function that can be activated from the GUI app
 
-char user_sex = 'M'; // M for male, F for female
-float user_weight = 70; // [kg]
-float user_height = 1.75; // [m]
-
 double Gain_L = 1;
 double Gain_R = 1;
 double Gain_common = 1;
@@ -60,48 +56,6 @@ double MIN_torque_command = -12;
 
 float initial_pos_1 = 0;       
 float initial_pos_2 = 0;    
-
-/*Fitting parameters for the relationship between moment arm and elevation angle ( see function Compute_moment_arm(float elevation_angle))*/
-const double a1 = 508.5;
-const double b1 = 0.02148;
-const double c1 = -0.6065;
-const double a2 = 455;
-const double b2 = 0.02248;
-const double c2 = 2.479;
-
-float radius_motor_pulley = 0.046; // [m]
-
-/*Anthropometric parameters to estimate the gravitational torque as a function of user weight and height*/
-// Their values are set in the function setup()
-float ua_wc = 0;
-float ua_hc = 0;
-float ua_COMc = 0;
-
-float fa_wc = 0;
-float fa_hc = 0;
-float fa_COMc = 0;
-
-float h_wc = 0;
-float h_hc = 0;
-float h_COMc = 0;
-
-float ua_weight = 0;
-float ua_length = 0;
-float ua_moment_arm = 0;
-
-float fa_weight = 0;
-float fa_length = 0;
-float fa_moment_arm = 0;
-
-float h_weight = 0;
-float h_length = 0;
-float h_moment_arm = 0;
-
-float coeff_weight = 0;
-float coeff_height = 0;
-float coeff_COM = 0;
-
-///////////////////////////////////////////////////////
 
 /*Create motor objects (see omni_motor_Control.h)*/
 Motor_Control_Tmotor omni_m1(omni_motor_ID_1, CAN_ID);
@@ -180,49 +134,7 @@ void setup() {
   Serial5.begin(115200);    //used to communication with bluetooth peripheral. Teensy->RS232->Adafruit Feather nRF52840 Express(peripheral)
   //Serial7.begin(115200);  // Communication with Raspberry PI or PC for High-lever controllers like RL
   Serial_Com.INIT();    
-
-  /*Initialize anthropometricparameters depending on user sex*/
-  if (user_sex == 'M')
-  {
-    ua_wc = 3.25/100;
-    ua_hc = 17.2/100;
-    ua_COMc = 43.6/100;
-    
-    fa_wc = 1.87/100;
-    fa_hc = 15.7/100;
-    fa_COMc = 43.0/100;
-    
-    h_wc = 0.65/100;
-    h_hc = 5.75/100;
-    h_COMc = 46.8/100;
-  }
-  else if (user_sex == 'F')
-  {
-    ua_wc = 2.9/100;
-    ua_hc = 17.3/100;
-    ua_COMc = 45.8/100;
-    
-    fa_wc = 1.57/100;
-    fa_hc = 16.0/100;
-    fa_COMc = 43.4/100;
-    
-    h_wc = 0.5/100;
-    h_hc = 5.75/100;
-    h_COMc = 46.8/100;
-  }
-
-  ua_weight = user_weight*ua_wc;
-  ua_length = user_height*ua_hc;
-  ua_moment_arm = ua_length*ua_COMc;
-
-  fa_weight = user_weight*fa_wc;
-  fa_length = user_height*fa_hc;
-  fa_moment_arm = ua_length + fa_length*fa_COMc;
-  
-  h_weight = user_weight*h_wc;
-  h_length = user_height*h_hc;
-  h_moment_arm = ua_length + fa_length + h_length*h_COMc;
-  
+ 
   /*Initialize motors and CAN communication*/
   initial_CAN();    
   initial_omni_motor();    
@@ -246,6 +158,7 @@ void loop() {
       {
         Receive_ble_Data();  
         Transmit_ble_Data();      
+        print_data_motor();  
         previous_time_ble = current_time;   
       }  
 
@@ -283,10 +196,9 @@ void loop() {
 
       //send torque commands to the motors
       omni_m1.omni_torque_cmd(M1_torque_command);      
-      omni_m2.omni_torque_cmd(M2_torque_command);  
+      omni_m2.omni_torque_cmd(M2_torque_command);
 
-      print_data_motor();      
-      
+      //print_data_motor();      
       previous_time = current_time;   
     }  
 }  
@@ -305,75 +217,12 @@ void Compute_Torque_Commands()
     M1_torque_command =  Gain_L * sin(2 * PI * t) * 0.7;
     M2_torque_command =  Gain_R * sin(2 * PI * t) * 0.7;
   }
-  else if (assist_mode == 3)
-  {
-    mode = "Gravity Compensation";
-    //arm_abduction_L = -imu.LTx;
-    //arm_flexion_L = -imu.LTz;
-
-    //arm_abduction_R = -imu.RTx;
-    //arm_flexion_R = imu.RTz;
-    //int_rotation_R = imu.RTy;
-
-    // compute arm elevation from IMU angle components
-    arm_elevation_L = cos(imu.LTx*PI/180)*cos(imu.LTy*PI/180);
-    arm_elevation_L = acos(arm_elevation_L)*180/PI;
-    
-    arm_elevation_R = cos(imu.RTx*PI/180)*cos(imu.RTy*PI/180);
-    arm_elevation_R = acos(arm_elevation_R)*180/PI;
-
-
-    if (arm_elevation_L > angle_threshold)
-    {
-      torque_bio_L = Compute_Biological_Torque(arm_elevation_L);
-      moment_arm_L = Compute_moment_arm(arm_elevation_L) / 1000;
-      motor_torque_L = torque_bio_L * radius_motor_pulley / moment_arm_L;
-      M1_torque_command = Gain_L * Gain_common * motor_torque_L;
-    }
-    else
-    {
-      M1_torque_command = 0;
-    }
-    
-    if (arm_elevation_R > angle_threshold)
-    {
-      torque_bio_R = Compute_Biological_Torque(arm_elevation_R);
-      moment_arm_R = Compute_moment_arm(arm_elevation_R) / 1000;
-      motor_torque_R = torque_bio_R * radius_motor_pulley / moment_arm_R;
-      M2_torque_command = Gain_R * Gain_common * motor_torque_R;
-    }
-    else
-    {
-      M2_torque_command = 0;
-    }
-    
-  }
-  else if (assist_mode == 4) //Serial communication with High level system
-  {
-    mode = "High Level Control";
-    //send_serial_Data_Highlevel(); 
-    //receive_serial_Data_Highlevel();
-    //M1_torque_command = ...;
-    //M2_torque_command = ...;
-  }
   else
   {
     mode = "Zero Torque";
     M1_torque_command = 0;
     M2_torque_command = 0;
   }
-}
-
-float Compute_Biological_Torque(float elevation_angle)
-{
-  float torque = (ua_weight*ua_moment_arm + fa_weight*fa_moment_arm + h_weight*h_moment_arm) * 9.81 * sin(elevation_angle*PI/180);
-  return torque;
-}
-
-float Compute_moment_arm(float elevation_angle)
-{ 
-  float moment_arm = a1*sin(b1*elevation_angle + c1) + a2*sin(b2*elevation_angle + c2);
-  return moment_arm;
 }
 
 //// initialize motor //// 
@@ -397,14 +246,12 @@ void initial_omni_motor()
   omni_m2.request_pos_vel();     
   delay(500);    
 
-  omni_m1.omni_torque_cmd(0.2);    
-  omni_m1.request_torque();   
-
-  delay(200);    
-  omni_m2.omni_torque_cmd(0.2);    
-  omni_m2.request_torque();   
-  
-  delay(200);   
+  //  omni_m1.omni_torque_cmd(0.2);    
+  //  omni_m1.request_torque();   
+  // delay(200);    
+  // omni_m2.omni_torque_cmd(0.2);    
+  // omni_m2.request_torque();   
+  // delay(200);   
   
   for (int i=0; i < 10; i++)
   {

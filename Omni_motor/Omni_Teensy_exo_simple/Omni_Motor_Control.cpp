@@ -422,5 +422,6 @@ void Motor_Control_Tmotor::omni_torque_cmd(float tau) {
   // }
   // Serial.println();
 
-  send_CAN_message();   
+  send_CAN_message(); 
+  delay(3);  
 }   

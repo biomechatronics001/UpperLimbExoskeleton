@@ -280,7 +280,7 @@ void loop() {
         //for bluetooth connection
         Receive_ble_Data();  
         Transmit_ble_Data();      
-        previous_time_ble = current_time;   
+        previous_time_ble = current_time;
       }  
 
       currentpoint = doi;  
@@ -304,13 +304,24 @@ void loop() {
       
       // clip the torque command  
       M1_torque_command = clip_torque(M1_torque_command);         
-      M2_torque_command = clip_torque(M2_torque_command);           
+      M2_torque_command = clip_torque(M2_torque_command);       
     
       
       M2_torque_command = M2_torque_command * r_ctl_dir;        /// for right.   
       M1_torque_command = M1_torque_command * l_ctl_dir;   
+
+      //omni_m1.request_pos_vel();
+      // receive_torque_ctl_feedback();  //read motor CAN info
+
+      //omni_m1.request_torque();
+      // receive_torque_ctl_feedback();  //read motor CAN info
+
+      //mni_m2.request_pos_vel();
+      // receive_torque_ctl_feedback();  //read motor CAN info
+
+      //omni_m2.request_torque();
+      //receive_torque_ctl_feedback();  //read motor CAN info
       
-      print_data_motor();
       if (ctl_mode == 1)    
       {
         // mit control    
@@ -328,11 +339,13 @@ void loop() {
           //read motor CAN info
           receive_torque_ctl_feedback();     
         }      
-
+        print_data_motor();  
         omni_m1.sig_torque_cmd(M1_torque_command);      
-        omni_m2.sig_torque_cmd(M2_torque_command);        
+        omni_m2.sig_torque_cmd(M2_torque_command);
+              
       }
       //Wait(2200);
+      //print_data_motor();
       previous_time = current_time;   
     }  
 }  
@@ -517,17 +530,17 @@ void print_data_motor() {
   //  Serial.print("   ");
   Serial.print(current_time);
   Serial.print(" ; ");
-  Serial.print(" M1_tor ; "); //M1 is left, M2 is right
-  Serial.print(omni_m1.torque);    
-  Serial.print(" ; M1_cmd ; ");   
-  Serial.print(M1_torque_command);   
-  Serial.print(" ; M2_tor ; ");  
-  Serial.print(omni_m2.torque);  
-  Serial.print(" ; M2_cmd ; ");   
-  Serial.print(M2_torque_command);
-  Serial.print(" ; M1_pos ; ");
-  Serial.print(omni_m1.pos);
-  Serial.println(" ;  ");
+  // Serial.print(" M1_tor ; "); //M1 is left, M2 is right
+  // Serial.print(omni_m1.torque);    
+  // Serial.print(" ; M1_cmd ; ");   
+  // Serial.print(M1_torque_command);   
+  // Serial.print(" ; M2_tor ; ");  
+  // Serial.print(omni_m2.torque);  
+  // Serial.print(" ; M2_cmd ; ");   
+  // Serial.print(M2_torque_command);
+  // Serial.print(" ; M1_pos ; ");
+  // Serial.print(omni_m1.pos);
+  // Serial.println(" ;  ");
 }  
 
 void M1_Torque_Impedance_Control_Example(){
