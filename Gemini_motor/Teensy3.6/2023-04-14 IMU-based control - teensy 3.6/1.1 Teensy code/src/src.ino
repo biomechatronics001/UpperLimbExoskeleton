@@ -50,8 +50,8 @@ uint32_t ID_offset = 0x140;
 ///////////////////////////////////////////////////////
 
 char user_sex = 'M'; // M for male, F for female
-float user_weight = 70; // [kg]
-float user_height = 1.76; // [m]
+float user_weight = 62; // [kg]
+float user_height = 1.71; // [m]
 
 int assist_mode = 3;
 

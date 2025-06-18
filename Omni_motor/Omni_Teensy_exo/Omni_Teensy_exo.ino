@@ -34,7 +34,7 @@ int CAN_ID = 3;
 //////////////////// CONTROL PARAMETERS ////////////////////
 // This first block includes parameters that can be changed from the GUI app //
 
-int assist_mode = 2;    // see function Compute_Torque_Commands(): 1 constant signal, 2 sine wave, 3 gravity compensation
+int assist_mode = 3;    // see function Compute_Torque_Commands(): 1 constant signal, 2 sine wave, 3 gravity compensation
 int Stop_button = 0;    // Stop function that can be activated from the GUI app
 
 char user_sex = 'M'; // M for male, F for female
@@ -55,8 +55,8 @@ uint32_t omni_motor_ID_2 = 1;
 double M1_torque_command = 0;  
 double M2_torque_command = 0;    
 
-double MAX_torque_command = 12;   
-double MIN_torque_command = -12;    
+double MAX_torque_command = 3;   
+double MIN_torque_command = -MAX_torque_command;    
 
 float initial_pos_1 = 0;       
 float initial_pos_2 = 0;    
@@ -222,6 +222,10 @@ void setup() {
   h_weight = user_weight*h_wc;
   h_length = user_height*h_hc;
   h_moment_arm = ua_length + fa_length + h_length*h_COMc;
+
+  imu.INIT(); //Initialize IMU;
+  delay(500);
+  imu.INIT_MEAN();
   
   /*Initialize motors and CAN communication*/
   initial_CAN();    
@@ -271,14 +275,14 @@ void loop() {
       //omni_m1.request_pos_vel();
       //receive_torque_ctl_feedback();  //read motor CAN info
 
-      omni_m1.request_torque();
+      //omni_m1.request_torque();
       //receive_torque_ctl_feedback();  //read motor CAN info
 
       //omni_m2.request_pos_vel();
       //receive_torque_ctl_feedback();  //read motor CAN info
 
-      omni_m2.request_torque();
-      receive_torque_ctl_feedback();  //read motor CAN info
+      //omni_m2.request_torque();
+      //receive_torque_ctl_feedback();  //read motor CAN info
       //} 
 
       //send torque commands to the motors
@@ -556,13 +560,13 @@ void Transmit_ble_Data() {
 void print_data_motor() {
   //M1 is left, M2 is right
   Serial.print(current_time);
-  Serial.print(" ; M1_tor : "); Serial.print(omni_m1.torque);    
+  Serial.print(" ; angle_L : "); Serial.print(arm_elevation_L);
+  Serial.print(" ; angle_R : "); Serial.print(arm_elevation_R);
   Serial.print(" ; M1_cmd : "); Serial.print(M1_torque_command);   
-  Serial.print(" ; M2_tor : "); Serial.print(omni_m2.torque);  
-  Serial.print(" ; M2_cmd : "); Serial.print(M2_torque_command);
-  Serial.print(" ; M1_pos : "); Serial.print(omni_m1.pos);
-  Serial.print(" ; M2_pos : "); Serial.print(omni_m2.pos);
-  Serial.println(" ;  ");
+  //Serial.print(" ; M1_tor : "); Serial.print(omni_m1.torque);  
+  Serial.print(" ; M2_cmd : "); Serial.print(M2_torque_command);  
+  //Serial.print(" ; M2_tor : "); Serial.print(omni_m2.torque);  
+  //Serial.print(" ; M1_pos : "); Serial.print(omni_m1.pos);
+  //Serial.print(" ; M2_pos : "); Serial.print(omni_m2.pos);
+  Serial.println();
 }  
-
-
